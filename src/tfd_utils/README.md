@@ -24,7 +24,7 @@ uv sync
 ### Basic Usage
 
 ```python
-from tf_utils import TFRecordRandomAccess
+from tfd_utils import TFRecordRandomAccess
 
 # Create a random access reader
 reader = TFRecordRandomAccess(

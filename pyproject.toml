@@ -1,5 +1,5 @@
 [project]
-name = "tf-utils"
+name = "tfd-utils"
 version = "0.1.0"
 description = "TensorFlow utilities for efficient TFRecord processing and random access"
 readme = "README.md"

@@ -1,5 +1,5 @@
 """
-Test package for tf_utils.
+Test package for tfd_utils.
 
-This package contains all test files for the tf_utils library.
+This package contains all test files for the tfd_utils library.
 """

@@ -1,5 +1,5 @@
 """
-Pytest configuration for tf_utils tests.
+Pytest configuration for tfd_utils tests.
 """
 
 import pytest
@@ -16,6 +16,6 @@ def test_data_dir():
     import tempfile
     import shutil
     
-    test_dir = tempfile.mkdtemp(prefix="tf_utils_pytest_")
+    test_dir = tempfile.mkdtemp(prefix="tfd_utils_pytest_")
     yield test_dir
     shutil.rmtree(test_dir)

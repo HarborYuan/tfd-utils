@@ -13,7 +13,7 @@ import json
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from tf_utils.random_access import TFRecordRandomAccess
+from tfd_utils.random_access import TFRecordRandomAccess
 from tests.generate_test_data import create_test_tfrecords, create_test_data_with_different_key_types
 
 
@@ -23,7 +23,7 @@ class TestTFRecordRandomAccess:
     @pytest.fixture(scope="class")
     def test_data_dir(self):
         """Create test data directory and files."""
-        test_dir = tempfile.mkdtemp(prefix="tf_utils_test_")
+        test_dir = tempfile.mkdtemp(prefix="tfd_utils_test_")
         
         # Create test TFRecord files
         tfrecord_files = create_test_tfrecords(test_dir, num_files=3, records_per_file=5)

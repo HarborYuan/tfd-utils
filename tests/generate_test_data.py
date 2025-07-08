@@ -8,8 +8,6 @@ import requests
 from PIL import Image
 import io
 import json
-import tempfile
-from pathlib import Path
 from typing import List, Dict, Any
 
 
@@ -134,7 +132,7 @@ def create_test_data_with_different_key_types(output_dir: str) -> str:
 
 if __name__ == "__main__":
     # Create test data directory
-    test_data_dir = "/tmp/tf_utils_test_data"
+    test_data_dir = "/tmp/tfd_utils_test_data"
     
     # Create main test data
     tfrecord_files = create_test_tfrecords(test_data_dir, num_files=3, records_per_file=10)

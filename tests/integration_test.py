@@ -13,7 +13,7 @@ from pathlib import Path
 # Add the src directory to Python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from tf_utils.random_access import TFRecordRandomAccess
+from tfd_utils.random_access import TFRecordRandomAccess
 from tests.generate_test_data import create_test_tfrecords
 
 
@@ -22,7 +22,7 @@ def test_basic_functionality():
     print("=== TFRecord Random Access Integration Test ===\n")
     
     # Create temporary directory for test data
-    test_dir = tempfile.mkdtemp(prefix="tf_utils_integration_test_")
+    test_dir = tempfile.mkdtemp(prefix="tfd_utils_integration_test_")
     print(f"Test directory: {test_dir}")
     
     try:

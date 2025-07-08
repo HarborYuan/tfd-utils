@@ -1,4 +1,4 @@
-# TF Utils
+# TFD Utils
 
 A Python library for efficient TensorFlow TFRecord processing and random access.
 
@@ -13,7 +13,7 @@ A Python library for efficient TensorFlow TFRecord processing and random access.
 ## Quick Start
 
 ```python
-from tf_utils.random_access import TFRecordRandomAccess
+from tfd_utils.random_access import TFRecordRandomAccess
 
 # Initialize with a single file
 reader = TFRecordRandomAccess("path/to/your/file.tfrecord")
