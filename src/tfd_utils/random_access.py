@@ -216,19 +216,6 @@ class TFRecordRandomAccess:
             # Parse and return the example
             return tf.train.Example.FromString(record_bytes)
     
-    def get_raw_record(self, key: str) -> Optional[bytes]:
-        """
-        Get raw record bytes by key.
-        
-        Args:
-            key: The key to lookup
-            
-        Returns:
-            Raw record bytes if found, None otherwise
-        """
-        example = self.get_record(key)
-        return example.SerializeToString() if example else None
-    
     def get_feature(self, key: str, feature_name: str) -> Optional[Any]:
         """
         Get a specific feature value from a record.
