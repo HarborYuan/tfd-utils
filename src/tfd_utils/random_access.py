@@ -10,8 +10,11 @@ import pickle
 import glob
 from typing import Dict, Any, Optional, List, Union
 from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
+from functools import partial
 
-from .pb2 import Example  # type: ignore
+from .pb2 import Example
 
 class TFRecordRandomAccess:
     """
@@ -26,7 +29,10 @@ class TFRecordRandomAccess:
                  tfrecord_path: Union[str, Path, List[str], List[Path]], 
                  key_feature_name: str = 'key',
                  index_file: Optional[Union[str, Path]] = None,
-                 progress_interval: int = 1000):
+                 progress_interval: int = 1024,
+                 max_workers: Optional[int] = None,
+                 use_multiprocessing: bool = True,
+                 buffer_size: int = 1024 * 1024):  # 1MB buffer
         """
         Initialize the TFRecord random access reader.
         
@@ -39,14 +45,21 @@ class TFRecordRandomAccess:
             index_file: Optional path to save/load the index cache. If None,
                        will be auto-generated based on tfrecord_path
             progress_interval: Print progress every N records during indexing
+            max_workers: Maximum number of worker processes. If None, uses CPU count
+            use_multiprocessing: Whether to use multiprocessing for parallel file processing
+            buffer_size: File read buffer size in bytes
         """
         self.key_feature_name = key_feature_name
         self.progress_interval = progress_interval
+        self.max_workers = max_workers or multiprocessing.cpu_count()
+        self.buffer_size = buffer_size
         
         # Resolve TFRecord files
         self.tfrecord_files = self._resolve_tfrecord_files(tfrecord_path)
         if not self.tfrecord_files:
             raise ValueError(f"No TFRecord files found for path: {tfrecord_path}")
+        
+        self.use_multiprocessing = use_multiprocessing and len(self.tfrecord_files) > 1
         
         # Set up index file path
         self.index_file = self._get_index_file_path(index_file)
@@ -89,74 +102,75 @@ class TFRecordRandomAccess:
         else:
             return str(first_file.parent / f"{first_file.stem}_unified.index")
     
+    def _is_index_valid(self) -> bool:
+        """Check if the cached index is still valid."""
+        if not os.path.exists(self.index_file):
+            return False
+        
+        index_mtime = os.path.getmtime(self.index_file)
+        
+        # Check if any TFRecord file is newer than the index
+        for tfrecord_file in self.tfrecord_files:
+            if not os.path.exists(tfrecord_file):
+                return False
+            if os.path.getmtime(tfrecord_file) > index_mtime:
+                return False
+        
+        return True
+    
     def _build_index(self) -> Dict[str, Dict[str, Any]]:
         """Build index for all TFRecord files."""
         print(f"Building index for {len(self.tfrecord_files)} TFRecord file(s)...")
         
+        if self.use_multiprocessing and len(self.tfrecord_files) > 1:
+            return self._build_index_parallel()
+        else:
+            return self._build_index_sequential()
+    
+    def _build_index_sequential(self) -> Dict[str, Dict[str, Any]]:
+        """Build index sequentially (original method)."""
         index = {}
         total_records = 0
         
         for tfrecord_file in self.tfrecord_files:
-            print(f"Processing {os.path.basename(tfrecord_file)}...")
-            file_records = 0
+            file_index = _process_single_tfrecord(tfrecord_file, self.key_feature_name, self.progress_interval)
+            index.update(file_index)
+            total_records += len(file_index)
+        
+        print(f"Total records indexed: {total_records}")
+        
+        # Save the index to cache file
+        with open(self.index_file, 'wb') as f:
+            pickle.dump(index, f)
+        print(f"Index saved to {self.index_file}")
+        
+        return index
+    
+    def _build_index_parallel(self) -> Dict[str, Dict[str, Any]]:
+        """Build index using multiprocessing for parallel file processing."""
+        print(f"Using {self.max_workers} worker processes for parallel indexing...")
+        
+        index = {}
+        total_records = 0
+        
+        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all files for processing - use optimized function
+            process_func = partial(_process_single_tfrecord, 
+                                 key_feature_name=self.key_feature_name,
+                                 progress_interval=self.progress_interval)
             
-            with open(tfrecord_file, 'rb') as f:
-                while True:
-                    offset = f.tell()
-                    try:
-                        # Read TFRecord format: [length][length_crc][data][data_crc]
-                        len_bytes = f.read(8)
-                        if not len_bytes:
-                            break
-                        
-                        length = int.from_bytes(len_bytes, 'little')
-                        
-                        # Skip the CRC checksum for the length
-                        f.seek(4, os.SEEK_CUR)
-                        
-                        # Read the record data
-                        record_bytes = f.read(length)
-                        if len(record_bytes) != length:
-                            break
-                        
-                        # Skip the CRC checksum for the record
-                        f.seek(4, os.SEEK_CUR)
-                        
-                        # Parse the record to extract the key
-                        example = Example.FromString(record_bytes)
-                        
-                        # Extract key from the specified feature
-                        if self.key_feature_name not in example.features.feature:
-                            raise ValueError(f"Feature '{self.key_feature_name}' not found in record")
-                        
-                        feature = example.features.feature[self.key_feature_name]
-                        if feature.bytes_list.value:
-                            key = feature.bytes_list.value[0].decode('utf-8')
-                        elif feature.int64_list.value:
-                            key = str(feature.int64_list.value[0])
-                        elif feature.float_list.value:
-                            key = str(feature.float_list.value[0])
-                        else:
-                            raise ValueError(f"Unsupported feature type for key: {self.key_feature_name}")
-                        
-                        # Store file path and offset in the index
-                        index[key] = {
-                            'file': tfrecord_file,
-                            'offset': offset,
-                            'length': length
-                        }
-                        
-                        file_records += 1
-                        total_records += 1
-                        
-                        if file_records % self.progress_interval == 0:
-                            print(f"  Processed {file_records} records from {os.path.basename(tfrecord_file)}")
-                    
-                    except Exception as e:
-                        print(f"Error reading record at offset {offset} in {tfrecord_file}: {e}")
-                        break
+            future_to_file = {executor.submit(process_func, tfrecord_file): tfrecord_file 
+                             for tfrecord_file in self.tfrecord_files}
             
-            print(f"  Completed {os.path.basename(tfrecord_file)}: {file_records} records")
+            # Collect results as they complete
+            for future in as_completed(future_to_file):
+                tfrecord_file = future_to_file[future]
+                try:
+                    file_index = future.result()
+                    index.update(file_index)
+                    total_records += len(file_index)
+                except Exception as e:
+                    print(f"Error processing {tfrecord_file}: {e}")
         
         print(f"Total records indexed: {total_records}")
         
@@ -169,11 +183,12 @@ class TFRecordRandomAccess:
     
     def _load_index(self) -> Dict[str, Dict[str, Any]]:
         """Load index from cache file or build if not exists."""
-        if os.path.exists(self.index_file):
+        if self._is_index_valid():
             print(f"Loading index from {self.index_file}")
             with open(self.index_file, 'rb') as f:
                 return pickle.load(f)
         else:
+            print("Index cache is invalid or missing, rebuilding...")
             return self._build_index()
     
     @property
@@ -291,3 +306,68 @@ class TFRecordRandomAccess:
         if result is None:
             raise KeyError(f"Key '{key}' not found")
         return result
+
+def _process_single_tfrecord(tfrecord_file: str, key_feature_name: str, progress_interval: int = 1000) -> Dict[str, Dict[str, Any]]:
+    """Process a single TFRecord file and return its index."""
+    print(f"Processing {os.path.basename(tfrecord_file)}...")
+    
+    index = {}
+    file_records = 0
+    
+    with open(tfrecord_file, 'rb') as f:
+        while True:
+            offset = f.tell()
+            try:
+                # Read TFRecord format: [length][length_crc][data][data_crc]
+                len_bytes = f.read(8)
+                if not len_bytes:
+                    break
+                
+                length = int.from_bytes(len_bytes, 'little')
+                
+                # Skip the CRC checksum for the length
+                f.seek(4, os.SEEK_CUR)
+                
+                # Read the record data
+                record_bytes = f.read(length)
+                if len(record_bytes) != length:
+                    break
+                
+                # Skip the CRC checksum for the record
+                f.seek(4, os.SEEK_CUR)
+                
+                # Parse the record to extract the key
+                example = Example.FromString(record_bytes)
+                
+                # Extract key from the specified feature
+                if key_feature_name not in example.features.feature:
+                    raise ValueError(f"Feature '{key_feature_name}' not found in record")
+                
+                feature = example.features.feature[key_feature_name]
+                if feature.bytes_list.value:
+                    key = feature.bytes_list.value[0].decode('utf-8')
+                elif feature.int64_list.value:
+                    key = str(feature.int64_list.value[0])
+                elif feature.float_list.value:
+                    key = str(feature.float_list.value[0])
+                else:
+                    raise ValueError(f"Unsupported feature type for key: {key_feature_name}")
+                
+                # Store file path and offset in the index
+                index[key] = {
+                    'file': tfrecord_file,
+                    'offset': offset,
+                    'length': length
+                }
+                
+                file_records += 1
+                
+                if file_records % progress_interval == 0:
+                    print(f"  Processed {file_records} records from {os.path.basename(tfrecord_file)}")
+            
+            except Exception as e:
+                print(f"Error reading record at offset {offset} in {tfrecord_file}: {e}")
+                break
+    
+    print(f"  Completed {os.path.basename(tfrecord_file)}: {file_records} records")
+    return index

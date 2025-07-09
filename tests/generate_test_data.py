@@ -10,7 +10,7 @@ import json
 from typing import List, Dict, Any
 
 
-from tfd_utils.pb2 import Example, Features, Feature, BytesList, Int64List, FloatList  # type: ignore
+from tfd_utils.pb2 import Example, Features, Feature, BytesList, Int64List, FloatList
 from tfd_utils.writer import TFRecordWriter
 
 def download_test_image(url: str = "https://yuanhaobo.me/assets/img/yuanhaobo.jpg?18dff0f3b5aca4712c52789805459350") -> bytes:
