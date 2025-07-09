@@ -8,10 +8,10 @@ It builds an index on first access and caches it for subsequent lookups.
 import os
 import pickle
 import glob
-import tensorflow as tf
 from typing import Dict, Any, Optional, List, Union
 from pathlib import Path
 
+from .pb2.example_pb2 import Example
 
 class TFRecordRandomAccess:
     """
@@ -123,7 +123,7 @@ class TFRecordRandomAccess:
                         f.seek(4, os.SEEK_CUR)
                         
                         # Parse the record to extract the key
-                        example = tf.train.Example.FromString(record_bytes)
+                        example = Example.FromString(record_bytes)
                         
                         # Extract key from the specified feature
                         if self.key_feature_name not in example.features.feature:
@@ -183,7 +183,7 @@ class TFRecordRandomAccess:
             self._index = self._load_index()
         return self._index
     
-    def get_record(self, key: str) -> Optional[tf.train.Example]:
+    def get_record(self, key: str) -> Optional[Example]:
         """
         Get a TFRecord by key.
         
@@ -191,7 +191,7 @@ class TFRecordRandomAccess:
             key: The key to lookup
             
         Returns:
-            tf.train.Example if found, None otherwise
+            Example if found, None otherwise
         """
         if key not in self.index:
             return None
@@ -214,7 +214,7 @@ class TFRecordRandomAccess:
             record_bytes = f.read(length)
             
             # Parse and return the example
-            return tf.train.Example.FromString(record_bytes)
+            return Example.FromString(record_bytes)
     
     def get_feature(self, key: str, feature_name: str) -> Optional[Any]:
         """
@@ -285,7 +285,7 @@ class TFRecordRandomAccess:
         """Check if key exists using 'in' operator."""
         return self.contains_key(key)
     
-    def __getitem__(self, key: str) -> tf.train.Example:
+    def __getitem__(self, key: str) -> Example:
         """Get record using [] operator."""
         result = self.get_record(key)
         if result is None:
