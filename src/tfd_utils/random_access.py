@@ -109,13 +109,33 @@ class TFRecordRandomAccess:
         
         index_mtime = os.path.getmtime(self.index_file)
         
+        # For performance optimization: if there are many files, only check the first 5
+        # and also check if the parent directory has been modified
+        if len(self.tfrecord_files) > 5:
+            # Check parent directory modification time
+            # Note: Allow small time difference to avoid conflicts when index file creation
+            # modifies the parent directory timestamp
+            parent_dir = os.path.dirname(self.tfrecord_files[0])
+            parent_mtime = os.path.getmtime(parent_dir)
+            
+            # If parent directory is significantly newer than index (more than 1 second),
+            # it suggests files may have been added/removed
+            if parent_mtime > index_mtime + 1:
+                return False
+            
+            # Check only the first 5 files
+            files_to_check = self.tfrecord_files[:5]
+        else:
+            # Check all files if there are 5 or fewer
+            files_to_check = self.tfrecord_files
+        
         # Check if any TFRecord file is newer than the index
-        for tfrecord_file in self.tfrecord_files:
+        for tfrecord_file in files_to_check:
             if not os.path.exists(tfrecord_file):
                 return False
             if os.path.getmtime(tfrecord_file) > index_mtime:
                 return False
-        
+
         return True
     
     def _build_index(self) -> Dict[str, Dict[str, Any]]:
