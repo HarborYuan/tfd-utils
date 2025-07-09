@@ -6,6 +6,7 @@ import os
 import pytest
 import tempfile
 import shutil
+import time
 from pathlib import Path
 import json
 
@@ -239,6 +240,149 @@ class TestTFRecordRandomAccess:
         # Should work without issues
         _ = reader.index
         assert len(reader.index) == 15
+    
+    def test_is_index_valid(self, test_data_dir):
+        """Test _is_index_valid method with various scenarios."""
+        test_dir, tfrecord_files, _ = test_data_dir
+        
+        # Test case 1: Index file doesn't exist
+        reader = TFRecordRandomAccess(tfrecord_files)
+        # Make sure index file doesn't exist
+        if os.path.exists(reader.index_file):
+            os.remove(reader.index_file)
+        
+        assert not reader._is_index_valid()
+        
+        # Test case 2: Index file exists and is valid
+        # Build the index first
+        _ = reader.index
+        assert reader._is_index_valid()
+        
+        # Test case 3: TFRecord file is newer than index
+        import time
+        time.sleep(0.1)  # Small delay to ensure different timestamps
+        
+        # Touch the first TFRecord file to make it newer
+        os.utime(tfrecord_files[0])
+        assert not reader._is_index_valid()
+        
+        # Rebuild index
+        reader.rebuild_index()
+        assert reader._is_index_valid()
+        
+        # Test case 4: TFRecord file doesn't exist
+        # Create a reader with a non-existent file in the list
+        temp_file = os.path.join(test_dir, "temp_file.tfrecord")
+        with open(temp_file, 'w') as f:
+            f.write("dummy")
+        
+        reader_with_temp = TFRecordRandomAccess([tfrecord_files[0], temp_file])
+        # Build index first
+        try:
+            _ = reader_with_temp.index
+        except:
+            # Index building might fail, but that's ok for this test
+            pass
+        
+        # Remove the temp file
+        os.remove(temp_file)
+        
+        # Now _is_index_valid should return False because temp_file doesn't exist
+        if os.path.exists(reader_with_temp.index_file):
+            assert not reader_with_temp._is_index_valid()
+    
+    def test_is_index_valid_many_files(self, test_data_dir):
+        """Test _is_index_valid with many files (>5) to test optimization path."""
+        test_dir, tfrecord_files, _ = test_data_dir
+        
+        # Create additional TFRecord files to have more than 5 total
+        additional_files = []
+        for i in range(3, 8):  # Create 5 more files (total will be 8)
+            additional_file = os.path.join(test_dir, f"additional_{i}.tfrecord")
+            # Copy an existing file to create a valid TFRecord
+            shutil.copy2(tfrecord_files[0], additional_file)
+            additional_files.append(additional_file)
+        
+        all_files = tfrecord_files + additional_files
+        
+        reader = TFRecordRandomAccess(all_files)
+        
+        # Build index first
+        _ = reader.index
+        assert reader._is_index_valid()
+        
+        # Test parent directory modification time check
+        import time
+        time.sleep(0.51) # should > 0.5 seconds to trigger the parent directory check
+        
+        # Touch the parent directory to make it newer
+        parent_dir = os.path.dirname(all_files[0])
+        # Create a new file in the directory to change its mtime
+        dummy_file = os.path.join(parent_dir, "dummy_file.txt")
+        with open(dummy_file, 'w') as f:
+            f.write("dummy")
+        # This should return False because parent directory is newer
+        assert not reader._is_index_valid()
+        _ = reader.rebuild_index()  # Rebuild index after parent directory change
+        assert reader._is_index_valid()
+        
+        # Clean up
+        os.remove(dummy_file)
+        for f in additional_files:
+            if os.path.exists(f):
+                os.remove(f)
+    
+    def test_is_index_valid_few_files(self, test_data_dir):
+        """Test _is_index_valid with few files (<=5) to test the regular path."""
+        test_dir, tfrecord_files, _ = test_data_dir
+        
+        # Use only 3 files (<=5)
+        reader = TFRecordRandomAccess(tfrecord_files[:3])
+        
+        # Build index first
+        _ = reader.index
+        assert reader._is_index_valid()
+        
+        # Touch one of the files to make it newer
+        import time
+        time.sleep(0.1)
+        os.utime(tfrecord_files[1])
+        
+        # This should return False because one of the files is newer
+        assert not reader._is_index_valid()
+
+    def test_optimization_path(self, test_data_dir):
+        """Test _is_index_valid with optimization path (more than 5 files)."""
+        test_dir, tfrecord_files, _ = test_data_dir
+        
+        # Create additional TFRecord files to have more than 5 total
+        additional_files = []
+        for i in range(3, 8):  # Create 5 more files (total will be 8)
+            additional_file = os.path.join(test_dir, f"additional_{i}.tfrecord")
+            # Copy an existing file to create a valid TFRecord
+            shutil.copy2(tfrecord_files[0], additional_file)
+            additional_files.append(additional_file)
+        
+        all_files = tfrecord_files + additional_files
+        
+        reader = TFRecordRandomAccess(all_files)
+        
+        # Build index first
+        _ = reader.index
+        assert reader._is_index_valid()
+        
+        # Touch one of the additional files to make it newer
+        import time
+        time.sleep(0.1)
+        os.utime(additional_files[0])
+        
+        # This should return False because one of the additional files is newer
+        assert not reader._is_index_valid()
+        
+        # Clean up
+        for f in additional_files:
+            if os.path.exists(f):
+                os.remove(f)
 
 
 if __name__ == "__main__":

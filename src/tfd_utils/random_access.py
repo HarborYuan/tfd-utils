@@ -120,7 +120,7 @@ class TFRecordRandomAccess:
             
             # If parent directory is significantly newer than index (more than 1 second),
             # it suggests files may have been added/removed
-            if parent_mtime > index_mtime + 1:
+            if parent_mtime > index_mtime + 0.5:
                 return False
             
             # Check only the first 5 files
