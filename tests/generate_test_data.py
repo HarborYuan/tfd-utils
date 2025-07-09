@@ -3,13 +3,15 @@ Generate test TFRecord data for testing the random access functionality.
 """
 
 import os
-import tensorflow as tf
 import requests
 from PIL import Image
 import io
 import json
 from typing import List, Dict, Any
 
+
+from tfd_utils.pb2 import Example, Features, Feature, BytesList, Int64List, FloatList  # type: ignore
+from tfd_utils.writer import TFRecordWriter
 
 def download_test_image(url: str = "https://yuanhaobo.me/assets/img/yuanhaobo.jpg?18dff0f3b5aca4712c52789805459350") -> bytes:
     """Download the test image and return as bytes."""
@@ -19,20 +21,20 @@ def download_test_image(url: str = "https://yuanhaobo.me/assets/img/yuanhaobo.jp
     return response.content
 
 
-def create_test_example(key: str, image_bytes: bytes, metadata: Dict[str, Any]) -> tf.train.Example:
-    """Create a tf.train.Example with the given data."""
+def create_test_example(key: str, image_bytes: bytes, metadata: Dict[str, Any]) -> Example:
+    """Create a Example with the given data."""
     # Create features
     features = {
-        'key': tf.train.Feature(bytes_list=tf.train.BytesList(value=[key.encode('utf-8')])),
-        'image': tf.train.Feature(bytes_list=tf.train.BytesList(value=[image_bytes])),
-        'metadata': tf.train.Feature(bytes_list=tf.train.BytesList(value=[json.dumps(metadata).encode('utf-8')])),
-        'width': tf.train.Feature(int64_list=tf.train.Int64List(value=[metadata.get('width', 0)])),
-        'height': tf.train.Feature(int64_list=tf.train.Int64List(value=[metadata.get('height', 0)])),
-        'format': tf.train.Feature(bytes_list=tf.train.BytesList(value=[metadata.get('format', 'JPEG').encode('utf-8')])),
+        'key': Feature(bytes_list=BytesList(value=[key.encode('utf-8')])),
+        'image': Feature(bytes_list=BytesList(value=[image_bytes])),
+        'metadata': Feature(bytes_list=BytesList(value=[json.dumps(metadata).encode('utf-8')])),
+        'width': Feature(int64_list=Int64List(value=[metadata.get('width', 0)])),
+        'height': Feature(int64_list=Int64List(value=[metadata.get('height', 0)])),
+        'format': Feature(bytes_list=BytesList(value=[metadata.get('format', 'JPEG').encode('utf-8')])),
     }
     
     # Create example
-    example = tf.train.Example(features=tf.train.Features(feature=features))
+    example = Example(features=Features(feature=features))
     return example
 
 
@@ -56,7 +58,7 @@ def create_test_tfrecords(output_dir: str, num_files: int = 3, records_per_file:
         
         print(f"Creating {output_file} with {records_per_file} records...")
         
-        with tf.io.TFRecordWriter(output_file) as writer:
+        with TFRecordWriter(output_file) as writer:
             for record_idx in range(records_per_file):
                 # Create unique key
                 key = f"test_{file_idx:03d}_{record_idx:04d}"
@@ -95,34 +97,34 @@ def create_test_data_with_different_key_types(output_dir: str) -> str:
     
     print(f"Creating {output_file} with different key types...")
     
-    with tf.io.TFRecordWriter(output_file) as writer:
+    with TFRecordWriter(output_file) as writer:
         # String key
-        example1 = tf.train.Example(features=tf.train.Features(feature={
-            'key': tf.train.Feature(bytes_list=tf.train.BytesList(value=[b'string_key_001'])),
-            'id': tf.train.Feature(int64_list=tf.train.Int64List(value=[1])),
-            'score': tf.train.Feature(float_list=tf.train.FloatList(value=[1.5])),
-            'image': tf.train.Feature(bytes_list=tf.train.BytesList(value=[image_bytes])),
-            'type': tf.train.Feature(bytes_list=tf.train.BytesList(value=[b'string_key'])),
+        example1 = Example(features=Features(feature={
+            'key': Feature(bytes_list=BytesList(value=[b'string_key_001'])),
+            'id': Feature(int64_list=Int64List(value=[1])),
+            'score': Feature(float_list=FloatList(value=[1.5])),
+            'image': Feature(bytes_list=BytesList(value=[image_bytes])),
+            'type': Feature(bytes_list=BytesList(value=[b'string_key'])),
         }))
         writer.write(example1.SerializeToString())
         
         # Integer key
-        example2 = tf.train.Example(features=tf.train.Features(feature={
-            'key': tf.train.Feature(bytes_list=tf.train.BytesList(value=[b'int_key_002'])),
-            'id': tf.train.Feature(int64_list=tf.train.Int64List(value=[2])),
-            'score': tf.train.Feature(float_list=tf.train.FloatList(value=[42.0])),
-            'image': tf.train.Feature(bytes_list=tf.train.BytesList(value=[image_bytes])),
-            'type': tf.train.Feature(bytes_list=tf.train.BytesList(value=[b'int_key'])),
+        example2 = Example(features=Features(feature={
+            'key': Feature(bytes_list=BytesList(value=[b'int_key_002'])),
+            'id': Feature(int64_list=Int64List(value=[2])),
+            'score': Feature(float_list=FloatList(value=[42.0])),
+            'image': Feature(bytes_list=BytesList(value=[image_bytes])),
+            'type': Feature(bytes_list=BytesList(value=[b'int_key'])),
         }))
         writer.write(example2.SerializeToString())
         
         # Float key
-        example3 = tf.train.Example(features=tf.train.Features(feature={
-            'key': tf.train.Feature(bytes_list=tf.train.BytesList(value=[b'float_key_003'])),
-            'id': tf.train.Feature(int64_list=tf.train.Int64List(value=[3])),
-            'score': tf.train.Feature(float_list=tf.train.FloatList(value=[99.5])),
-            'image': tf.train.Feature(bytes_list=tf.train.BytesList(value=[image_bytes])),
-            'type': tf.train.Feature(bytes_list=tf.train.BytesList(value=[b'float_key'])),
+        example3 = Example(features=Features(feature={
+            'key': Feature(bytes_list=BytesList(value=[b'float_key_003'])),
+            'id': Feature(int64_list=Int64List(value=[3])),
+            'score': Feature(float_list=FloatList(value=[99.5])),
+            'image': Feature(bytes_list=BytesList(value=[image_bytes])),
+            'type': Feature(bytes_list=BytesList(value=[b'float_key'])),
         }))
         writer.write(example3.SerializeToString())
     
