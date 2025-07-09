@@ -2,9 +2,9 @@
 // model training or inference.
 syntax = "proto3";
 
-package tfd_utils;
+package tfd_utils.pb2;
 
-import "feature.proto";
+import "tfd_utils/pb2/feature.proto";
 
 option cc_enable_arenas = true;
 // option java_outer_classname = "ExampleProtos";

@@ -55,7 +55,7 @@
 
 syntax = "proto3";
 
-package tfd_utils;
+package tfd_utils.pb2;
 
 option cc_enable_arenas = true;
 // option java_outer_classname = "FeatureProtos";
