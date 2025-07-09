@@ -11,7 +11,7 @@ import glob
 from typing import Dict, Any, Optional, List, Union
 from pathlib import Path
 
-from .pb2.example_pb2 import Example
+from .pb2 import Example  # type: ignore
 
 class TFRecordRandomAccess:
     """
