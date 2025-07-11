@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "crc32c>=2.7.1",
     "numpy>=2.1.0",
-    "protobuf>=5.29.5",
+    "protobuf>=5.29.5,<6.0.0.dev0",
 ]
 
 [project.optional-dependencies]
