@@ -14,7 +14,6 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 from functools import partial
 from collections import OrderedDict
-import threading
 
 from .pb2 import Example
 
