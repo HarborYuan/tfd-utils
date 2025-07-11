@@ -8,13 +8,79 @@ It builds an index on first access and caches it for subsequent lookups.
 import os
 import pickle
 import glob
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List, Union, BinaryIO
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 from functools import partial
+from collections import OrderedDict
+import threading
 
 from .pb2 import Example
+
+
+class FileContextPool:
+    """
+    A thread-safe LRU cache for file handles to optimize random access operations.
+    
+    This pool maintains a limited number of open file handles to avoid
+    repeatedly opening and closing files during random access operations.
+    """
+    
+    def __init__(self, max_size: int = 100):
+        """
+        Initialize the file context pool.
+        
+        Args:
+            max_size: Maximum number of file handles to keep open
+        """
+        self.max_size = max_size
+        self._pool: OrderedDict[str, BinaryIO] = OrderedDict()
+    
+    def get_file_handle(self, file_path: str) -> BinaryIO:
+        """
+        Get a file handle from the pool, opening if necessary.
+        
+        Args:
+            file_path: Path to the file
+            
+        Returns:
+            File handle ready for reading
+        """
+        if file_path in self._pool:
+            # Move to end (most recently used)
+            handle = self._pool.pop(file_path)
+            self._pool[file_path] = handle
+            return handle
+        
+        # Open new file
+        handle = open(file_path, 'rb')
+        
+        # Check if we need to evict the least recently used file
+        if len(self._pool) >= self.max_size:
+            # Remove the least recently used (first) item
+            oldest_path, oldest_handle = self._pool.popitem(last=False)
+            try:
+                oldest_handle.close()
+            except Exception:
+                pass  # Ignore errors when closing
+        
+        self._pool[file_path] = handle
+        return handle
+    
+    def close_all(self):
+        """Close all file handles in the pool."""
+        for handle in self._pool.values():
+            try:
+                handle.close()
+            except Exception:
+                pass  # Ignore errors when closing
+        self._pool.clear()
+    
+    def __del__(self):
+        """Cleanup when the pool is destroyed."""
+        self.close_all()
+
 
 class TFRecordRandomAccess:
     """
@@ -32,7 +98,7 @@ class TFRecordRandomAccess:
                  progress_interval: int = 1024,
                  max_workers: Optional[int] = None,
                  use_multiprocessing: bool = True,
-                 buffer_size: int = 1024 * 1024):  # 1MB buffer
+                 file_pool_size: int = 100):
         """
         Initialize the TFRecord random access reader.
         
@@ -47,12 +113,14 @@ class TFRecordRandomAccess:
             progress_interval: Print progress every N records during indexing
             max_workers: Maximum number of worker processes. If None, uses CPU count
             use_multiprocessing: Whether to use multiprocessing for parallel file processing
-            buffer_size: File read buffer size in bytes
+            file_pool_size: Maximum number of file handles to keep in the pool
         """
         self.key_feature_name = key_feature_name
         self.progress_interval = progress_interval
         self.max_workers = max_workers or multiprocessing.cpu_count()
-        self.buffer_size = buffer_size
+        
+        # Initialize file context pool
+        self.file_pool = FileContextPool(max_size=file_pool_size)
         
         # Resolve TFRecord files
         self.tfrecord_files = self._resolve_tfrecord_files(tfrecord_path)
@@ -235,21 +303,22 @@ class TFRecordRandomAccess:
         tfrecord_file = record_info['file']
         offset = record_info['offset']
         
-        with open(tfrecord_file, 'rb') as f:
-            f.seek(offset)
+        f = self.file_pool.get_file_handle(tfrecord_file)
+        
+        f.seek(offset)
             
-            # Read the record at the given offset
-            len_bytes = f.read(8)
-            length = int.from_bytes(len_bytes, 'little')
+        # Read the record at the given offset
+        len_bytes = f.read(8)
+        length = int.from_bytes(len_bytes, 'little')
             
-            # Skip length CRC
-            f.seek(4, os.SEEK_CUR)
+        # Skip length CRC
+        f.seek(4, os.SEEK_CUR)
             
-            # Read record data
-            record_bytes = f.read(length)
-            
-            # Parse and return the example
-            return Example.FromString(record_bytes)
+        # Read record data
+        record_bytes = f.read(length)
+        
+        # Parse and return the example
+        return Example.FromString(record_bytes)
     
     def get_feature(self, key: str, feature_name: str) -> Optional[Any]:
         """
@@ -326,6 +395,25 @@ class TFRecordRandomAccess:
         if result is None:
             raise KeyError(f"Key '{key}' not found")
         return result
+    
+    def close(self):
+        """Close all file handles in the pool."""
+        self.file_pool.close_all()
+    
+    def __del__(self):
+        """Cleanup when the instance is destroyed."""
+        try:
+            self.close()
+        except Exception:
+            pass  # Ignore errors during cleanup
+    
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        self.close()
 
 def _process_single_tfrecord(tfrecord_file: str, key_feature_name: str, progress_interval: int = 1000) -> Dict[str, Dict[str, Any]]:
     """Process a single TFRecord file and return its index."""
