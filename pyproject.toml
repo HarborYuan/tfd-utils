@@ -1,6 +1,6 @@
 [project]
 name = "tfd-utils"
-version = "0.2.3"
+version = "0.2.4"
 description = "TensorFlow utilities for efficient TFRecord processing and random access"
 readme = "README.md"
 authors = [
