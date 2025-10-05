@@ -12,10 +12,10 @@ import json
 
 # Import our module
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 from tfd_utils.random_access import TFRecordRandomAccess
-from tests.generate_test_data import create_test_tfrecords, create_test_data_with_different_key_types
+from tests.helpers.generate_test_data import create_test_tfrecords, create_test_data_with_different_key_types
 
 
 class TestTFRecordRandomAccess:

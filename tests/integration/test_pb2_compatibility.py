@@ -9,7 +9,7 @@ import tempfile
 from typing import Any, Dict, List
 
 # Import our module
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 from tfd_utils.pb2 import (
     Example, SequenceExample, 

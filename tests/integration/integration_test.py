@@ -11,10 +11,10 @@ import shutil
 from pathlib import Path
 
 # Add the src directory to Python path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 from tfd_utils.random_access import TFRecordRandomAccess
-from tests.generate_test_data import create_test_tfrecords
+from tests.helpers.generate_test_data import create_test_tfrecords
 
 
 def test_basic_functionality():
