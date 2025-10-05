@@ -55,3 +55,34 @@ uv run pytest
 The project uses GitHub Actions for CI/CD. The workflow is defined in `.github/workflows/publish.yml`.
 
 - **Publish to PyPI**: This workflow is triggered when a new release is published on GitHub. It builds the package and publishes it to PyPI.
+
+## 8. Git Workflow
+
+### Branching and Committing
+
+1.  **Create a new branch**:
+    ```bash
+    git checkout -b feature/your-feature-name
+    ```
+2.  **Stage your changes**:
+    ```bash
+    git add .
+    ```
+3.  **Commit your changes** with a descriptive message:
+    ```bash
+    git commit -m "feat: add your feature description"
+    ```
+4.  **Push your branch** to the remote repository:
+    ```bash
+    git push -u origin feature/your-feature-name
+    ```
+
+### Creating a Pull Request
+
+1.  Go to the repository on GitHub.
+2.  Click on the "Pull requests" tab.
+3.  Click the "New pull request" button.
+4.  Choose your feature branch and the `master` branch as the base.
+5.  Add a title and description to your pull request.
+6.  Request a review from one of the project maintainers.
+7.  Once the pull request is approved, you can **squash and merge** it into the `master` branch.
