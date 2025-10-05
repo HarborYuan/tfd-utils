@@ -12,7 +12,7 @@ import filecmp
 
 # Import our module
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 from tfd_utils.writer.tf_writer import TFRecordWriter
 from tfd_utils.pb2 import Example, Features, Feature, BytesList, Int64List, FloatList
