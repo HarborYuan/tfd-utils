@@ -30,6 +30,8 @@ This document provides essential context about the `tfd_utils` library for the G
 - **Random Reading**: Instantiate `TFRecordRandomAccess` with a path to one or more TFRecord files. Use `get_record(key)` or dictionary-style access (`reader[key]`) to fetch a specific record.
 - **Feature Extraction**: Use `get_feature(key, feature_name)` to directly extract the value of a specific feature from a record without parsing the whole `Example` proto yourself.
 
+## 5. Dependencies
+
 - **Core**: `numpy`, `protobuf`, `crc32c`
 - **Development/Testing**: `tensorflow`, `pytest`
 
