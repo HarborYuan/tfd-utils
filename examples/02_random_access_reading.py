@@ -10,9 +10,7 @@ print(f"Total records: {len(reader)}")
 # Access a record by key
 key = "record_3"
 if key in reader:
-    record_bytes = reader[key]
-    example = Example()
-    example.ParseFromString(record_bytes)
+    example = reader[key]
     image_bytes = example.features.feature['image'].bytes_list.value[0]
     print(f"Successfully read image for key '{key}': {image_bytes.hex()}")
 
