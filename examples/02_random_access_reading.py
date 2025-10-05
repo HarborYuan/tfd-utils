@@ -34,7 +34,5 @@ with TFRecordWriter("data_2.tfrecord") as writer:
 # Now, read from multiple files
 multi_reader = TFRecordRandomAccess(["data.tfrecord", "data_2.tfrecord"])
 print(f"Total records in multiple files: {len(multi_reader)}")
-record_10_bytes = multi_reader["record_10"]
-example_10 = Example()
-example_10.ParseFromString(record_10_bytes)
+example_10 = multi_reader["record_10"]
 print(f"Image from second file: {example_10.features.feature['image'].bytes_list.value[0]}")
