@@ -74,6 +74,37 @@ if "record_1" in reader:
 print(f"Total records: {len(reader)}")
 ```
 
+## Command-Line Interface (CLI)
+
+`tfd-utils` comes with a handy command-line tool, `tfd`, for quick inspection of TFRecord files.
+
+### Listing Keys
+
+To list all keys in one or more TFRecord files:
+
+```bash
+tfd list /path/to/your/data.tfrecord
+```
+
+You can also use glob patterns:
+
+```bash
+tfd list 'data_part_*.tfrecord'
+```
+
+### Extracting Records
+
+To extract a single record by its key:
+
+```bash
+tfd extract /path/to/your/data.tfrecord your_record_key
+```
+
+The tool will attempt to automatically detect the content type:
+-   **Images** (JPEG, PNG, GIF) are saved to a file (e.g., `your_record_key_image_0.jpeg`).
+-   **Text** is printed to the console.
+-   Other binary or numerical data is displayed in a readable format.
+
 ### TensorFlow Interoperability
 
 Read `tfd_utils` files with TensorFlow:
