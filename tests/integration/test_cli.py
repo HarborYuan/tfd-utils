@@ -22,16 +22,20 @@ def test_data():
     if os.path.exists(test_data_dir):
         os.rmdir(test_data_dir)
 
-def test_cli_list_keys(test_data):
+def test_cli_list_features(test_data):
     tfrecord_file = os.path.join(test_data, "test_data_000.tfrecord")
     result = subprocess.run(["uv", "run", "tfd", "list", tfrecord_file], capture_output=True, text=True)
     
     assert result.returncode == 0
-    keys = result.stdout.strip().split('\n')
-    # The last key is the last line of the output, but the output contains more than just the keys.
-    # so we check if the expected keys are in the output.
-    assert "test_000_0000" in keys
-    assert "test_000_0004" in keys
+    output = result.stdout
+    assert "Feature Name" in output
+    assert "Type" in output
+    assert "height" in output
+    assert "key" in output
+    assert "image" in output
+    assert "metadata" in output
+    assert "format" in output
+    assert "width" in output
 
 def test_cli_extract_record(test_data):
     tfrecord_file = os.path.join(test_data, "test_data_000.tfrecord")
