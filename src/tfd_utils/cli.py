@@ -4,12 +4,37 @@ import os
 from .random_access import TFRecordRandomAccess
 from .pb2 import Example
 
-def list_keys(args):
-    """List all keys in a TFRecord file."""
+def list_features(args):
+    """List feature names and their types of the first record in a TFRecord file."""
     reader = TFRecordRandomAccess(args.path)
     keys = reader.get_keys()
-    for key in keys:
-        print(key)
+    if not keys:
+        print("No records found.")
+        return
+
+    # Get the first record to inspect its features
+    first_key = keys[0]
+    record = reader.get_record(first_key)
+    if not record:
+        print(f"Could not read the first record (key: {first_key}).")
+        return
+
+    print(f"Features in the first record (key: {first_key}):")
+    print("-" * 40)
+    print(f"{'Feature Name':<20} {'Type':<10}")
+    print("-" * 40)
+
+    for feature_name, feature in record.features.feature.items():
+        feature_type = "Unknown"
+        if feature.bytes_list.value:
+            feature_type = "bytes"
+        elif feature.int64_list.value:
+            feature_type = "int64"
+        elif feature.float_list.value:
+            feature_type = "float"
+        
+        print(f"{feature_name:<20} {feature_type:<10}")
+    print("-" * 40)
 
 def extract_record(args):
     """Extract a single record and display or save it."""
@@ -55,9 +80,9 @@ def main():
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     # 'list' command
-    parser_list = subparsers.add_parser('list', help="List keys in a TFRecord file")
+    parser_list = subparsers.add_parser('list', help="List feature names of the first record in a TFRecord file")
     parser_list.add_argument('path', help="Path to the TFRecord file or directory of files")
-    parser_list.set_defaults(func=list_keys)
+    parser_list.set_defaults(func=list_features)
 
     # 'extract' command
     parser_extract = subparsers.add_parser('extract', help="Extract a record by key")
