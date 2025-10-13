@@ -51,4 +51,23 @@ def test_cli_extract_record(test_data):
     assert os.path.exists(image_file)
     os.remove(image_file)
 
+def test_cli_get_feature(test_data):
+    tfrecord_file = os.path.join(test_data, "test_data_000.tfrecord")
+    key = "test_000_0002"
+    feature_name = "width"
+    spec = f"{tfrecord_file}:{key}:{feature_name}"
+    result = subprocess.run(["uv", "run", "tfd", "get", spec], capture_output=True, text=True)
+
+    assert result.returncode == 0
+    assert f"Feature '{feature_name}' (int64): [240]" in result.stdout
+
+def test_cli_get_feature_bytes(test_data):
+    tfrecord_file = os.path.join(test_data, "test_data_000.tfrecord")
+    key = "test_000_0003"
+    feature_name = "format"
+    spec = f"{tfrecord_file}:{key}:{feature_name}"
+    result = subprocess.run(["uv", "run", "tfd", "get", spec], capture_output=True, text=True)
+
+    assert result.returncode == 0
+    assert f"Feature '{feature_name}[0]' (text): JPEG" in result.stdout
 

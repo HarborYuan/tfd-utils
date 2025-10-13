@@ -74,6 +74,49 @@ def extract_record(args):
         elif feature.float_list.value:
             print(f"Feature '{feature_name}' (float): {list(feature.float_list.value)}")
 
+def get_feature(args):
+    """Extract and display a single feature from a record."""
+    try:
+        path, key, feature_name = args.spec.rsplit(':', 2)
+    except ValueError:
+        print("Invalid format for 'get' command. Expected format: path:key:feature_name", file=sys.stderr)
+        sys.exit(1)
+
+    reader = TFRecordRandomAccess(path)
+    feature_value = reader.get_feature(key, feature_name)
+
+    if feature_value is None:
+        print(f"Feature '{feature_name}' not found for key '{key}'.", file=sys.stderr)
+        sys.exit(1)
+
+    if isinstance(feature_value, bytes):
+        # Try to detect image format from magic numbers
+        image_format = None
+        if feature_value.startswith(b'\xff\xd8'):
+            image_format = 'jpeg'
+        elif feature_value.startswith(b'\x89PNG\r\n\x1a\n'):
+            image_format = 'png'
+        elif feature_value.startswith(b'GIF87a') or feature_value.startswith(b'GIF89a'):
+            image_format = 'gif'
+
+        if image_format:
+            output_filename = f"{key}_{feature_name}_0.{image_format}"
+            with open(output_filename, 'wb') as f:
+                f.write(feature_value)
+            print(f"Saved image content from feature '{feature_name}' to {output_filename}")
+        else:
+            # Not an image, try to decode as text
+            try:
+                text = feature_value.decode('utf-8')
+                print(f"Feature '{feature_name}[0]' (text): {text}")
+            except UnicodeDecodeError:
+                print(f"Feature '{feature_name}[0]' (binary): {len(feature_value)} bytes")
+
+    elif isinstance(feature_value, int):
+        print(f"Feature '{feature_name}' (int64): [{feature_value}]")
+    elif isinstance(feature_value, float):
+        print(f"Feature '{feature_name}' (float): [{feature_value}]")
+
 def main():
     """Main entry point for the tfd-utils CLI."""
     parser = argparse.ArgumentParser(description="TFRecord Utilities CLI")
@@ -89,6 +132,11 @@ def main():
     parser_extract.add_argument('path', help="Path to the TFRecord file or directory of files")
     parser_extract.add_argument('key', help="Key of the record to extract")
     parser_extract.set_defaults(func=extract_record)
+
+    # 'get' command
+    parser_get = subparsers.add_parser('get', help="Extract a single feature from a record by key")
+    parser_get.add_argument('spec', help="Specification in the format 'path:key:feature_name'")
+    parser_get.set_defaults(func=get_feature)
 
     args = parser.parse_args()
     args.func(args)
