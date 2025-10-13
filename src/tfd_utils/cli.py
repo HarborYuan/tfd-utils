@@ -86,8 +86,8 @@ def get_feature(args):
     feature_value = reader.get_feature(key, feature_name)
 
     if feature_value is None:
-        print(f"Feature '{feature_name}' not found for key '{key}'.")
-        return
+        print(f"Feature '{feature_name}' not found for key '{key}'.", file=sys.stderr)
+        sys.exit(1)
 
     if isinstance(feature_value, bytes):
         # Try to detect image format from magic numbers
