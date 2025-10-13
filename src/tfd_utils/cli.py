@@ -79,8 +79,8 @@ def get_feature(args):
     try:
         path, key, feature_name = args.spec.rsplit(':', 2)
     except ValueError:
-        print("Invalid format for 'get' command. Expected format: path:key:feature_name")
-        return
+        print("Invalid format for 'get' command. Expected format: path:key:feature_name", file=sys.stderr)
+        sys.exit(1)
 
     reader = TFRecordRandomAccess(path)
     feature_value = reader.get_feature(key, feature_name)
