@@ -105,6 +105,16 @@ The tool will attempt to automatically detect the content type:
 -   **Text** is printed to the console.
 -   Other binary or numerical data is displayed in a readable format.
 
+### Getting a specific feature
+
+To get a single feature from a record by its key:
+
+```bash
+tfd get /path/to/your/data.tfrecord:your_record_key:your_feature_name
+```
+
+The tool will attempt to automatically detect the content type, similar to the `extract` command.
+
 ### TensorFlow Interoperability
 
 Read `tfd_utils` files with TensorFlow:
