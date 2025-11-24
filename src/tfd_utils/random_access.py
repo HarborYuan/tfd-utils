@@ -348,6 +348,35 @@ class TFRecordRandomAccess:
             return feature.float_list.value[0]
         else:
             return None
+
+    def get_feature_list(self, key: str, feature_name: str) -> Optional[List[Any]]:
+        """
+        Get a list of values for a specific feature from a record.
+        
+        Args:
+            key: The key to lookup
+            feature_name: Name of the feature to extract
+        Returns:
+            List of feature values if found, None otherwise
+        """        
+        example = self.get_record(key)
+        if example is None:
+            return None
+        
+        if feature_name not in example.features.feature:
+            return None
+        
+        feature = example.features.feature[feature_name]
+        
+        # Return the appropriate list based on feature type
+        if feature.bytes_list.value:
+            return list(feature.bytes_list.value)
+        elif feature.int64_list.value:
+            return list(feature.int64_list.value)
+        elif feature.float_list.value:
+            return list(feature.float_list.value)
+        else:
+            return None
     
     def contains_key(self, key: str) -> bool:
         """Check if a key exists in the index."""
