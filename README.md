@@ -1,37 +1,66 @@
-# TensorFlow TFRecord Utils
+# tfd-utils
 
-A lightweight Python library for efficient TensorFlow TFRecord processing with random access support, without requiring TensorFlow.
+A lightweight Python library for efficient random access to TensorFlow TFRecord files and tar archives, without requiring TensorFlow.
 
 ## Key Features
 
--   **Full TensorFlow Compatibility**: Write with `tfd_utils`, read with TensorFlow, or vice versa. 100% compatible and verified in tests.
--   **Random Access Support**: Access any record by key in O(1) time without reading the entire file.
--   **Lightweight & Standalone**: No TensorFlow installation required. Works with just `numpy`, `protobuf`, and `crc32c`.
--   **Simple API**: Ready to use with automatic index caching and zero configuration.
--   **Multiple File Support**: Handle single files, lists of files, or glob patterns seamlessly.
--   **Memory Efficient**: Only loads requested records into memory, not the entire dataset.
+-   **Unified API**: Access TFRecord files and tar archives through the same interface.
+-   **Random Access**: Access any record by key in O(1) time without reading the entire file.
+-   **Automatic Index Caching**: Index is built once and cached to disk; rebuilt automatically when files change.
+-   **Lightweight & Standalone**: TFRecord support requires only `numpy`, `protobuf`, and `crc32c`. No TensorFlow needed.
+-   **Full TensorFlow Compatibility**: Write with `tfd_utils`, read with TensorFlow (or vice versa). 100% compatible.
+-   **Multiple File Support**: Single files, lists of files, or glob patterns.
 
 ## Installation
-
-Install via pip:
 
 ```bash
 pip install tfd-utils
 ```
 
-Or for development with optional TensorFlow support:
-
-```bash
-git clone https://github.com/HarborYuan/tfd-utils.git
-cd tfd-utils
-pip install -e ".[dev]"
-```
-
 ## Usage
 
-### Writing TFRecords
+### TFRecord Random Access
 
-Create TFRecord files that TensorFlow can read:
+```python
+from tfd_utils import TFRecordRandomAccess
+
+reader = TFRecordRandomAccess("data.tfrecord")
+# or multiple files / glob patterns
+reader = TFRecordRandomAccess(["train_*.tfrecord", "val_*.tfrecord"])
+
+image_bytes = reader.get_feature("record_1", "image")
+record = reader["record_1"]   # all features as Example protobuf
+print(f"Total records: {len(reader)}")
+```
+
+### Tar Archive Random Access
+
+Tar archives are expected to contain paired files sharing the same stem:
+
+```
+sa_000001.jpg   →  key='sa_000001', feature='jpg'
+sa_000001.json  →  key='sa_000001', feature='json'
+```
+
+Both uncompressed (`.tar`) and compressed (`.tar.gz`, etc.) archives are supported.
+
+```python
+from tfd_utils import TarRandomAccess
+
+reader = TarRandomAccess("archive.tar")
+# or glob / list of tars
+reader = TarRandomAccess("sa1b/*.tar")
+
+jpg_bytes  = reader.get_feature("sa_000001", "jpg")
+json_bytes = reader.get_feature("sa_000001", "json")
+record     = reader["sa_000001"]   # {'jpg': bytes, 'json': bytes}
+print(f"Total records: {len(reader)}")
+```
+
+Member paths with subdirectory prefixes are handled automatically:
+`./subdir/foo.jpg` → key `subdir/foo`.
+
+### Writing TFRecords
 
 ```python
 from tfd_utils.writer import TFRecordWriter
@@ -39,85 +68,54 @@ from tfd_utils.pb2 import Example, Features, Feature, BytesList
 
 with TFRecordWriter("data.tfrecord") as writer:
     example = Example(features=Features(feature={
-        'key': Feature(bytes_list=BytesList(value=[b'record_1'])),
-        'image': Feature(bytes_list=BytesList(value=[b'your_image_bytes'])),
-        'label': Feature(bytes_list=BytesList(value=[b'cat']))
+        'key':   Feature(bytes_list=BytesList(value=[b'record_1'])),
+        'image': Feature(bytes_list=BytesList(value=[b'<image bytes>'])),
     }))
     writer.write(example.SerializeToString())
 ```
 
-### Random Access Reading
-
-Initialize with a single file, or with multiple files/patterns:
+### Common API (both readers)
 
 ```python
-from tfd_utils.random_access import TFRecordRandomAccess
+reader.get_record(key)                    # full record
+reader.get_feature(key, feature_name)     # single feature
+reader.get_feature_list(key, feature_name)
+reader.get_keys()                         # all keys
+reader.get_stats()                        # total_records, total_files, ...
+reader.contains_key(key)
+reader.rebuild_index()
 
-# Single file
-reader = TFRecordRandomAccess("data.tfrecord")
+key in reader                             # __contains__
+reader[key]                               # __getitem__ (raises KeyError if missing)
+len(reader)                               # __len__
 
-# Multiple files/patterns
-reader = TFRecordRandomAccess([
-    "train_*.tfrecord",
-    "validation_*.tfrecord"
-])
-
-# Access any record instantly by key
-record = reader.get_record("record_1")
-image_bytes = reader.get_feature("record_1", "image")
-
-# Dictionary-like access
-if "record_1" in reader:
-    record = reader["record_1"]
-
-# Get statistics
-print(f"Total records: {len(reader)}")
+with TarRandomAccess("archive.tar") as r: # context manager
+    ...
 ```
 
-## Command-Line Interface (CLI)
+### Advanced Options
 
-`tfd-utils` comes with a handy command-line tool, `tfd`, for quick inspection of TFRecord files.
+```python
+# TFRecord: custom key feature name (default 'key')
+reader = TFRecordRandomAccess("file.tfrecord", key_feature_name="id")
 
-### Listing Keys
+# Both: custom index file location
+reader = TFRecordRandomAccess("file.tfrecord", index_file="my.index")
+reader = TarRandomAccess("archive.tar", index_file="my.tar_index")
 
-To list all keys in one or more TFRecord files:
+# Both: control parallelism
+reader = TarRandomAccess("*.tar", max_workers=8, use_multiprocessing=True)
+```
+
+## CLI
 
 ```bash
-tfd list /path/to/your/data.tfrecord
+tfd list    /path/to/data.tfrecord
+tfd extract /path/to/data.tfrecord record_key
+tfd get     /path/to/data.tfrecord:record_key:feature_name
 ```
 
-You can also use glob patterns:
-
-```bash
-tfd list 'data_part_*.tfrecord'
-```
-
-### Extracting Records
-
-To extract a single record by its key:
-
-```bash
-tfd extract /path/to/your/data.tfrecord your_record_key
-```
-
-The tool will attempt to automatically detect the content type:
--   **Images** (JPEG, PNG, GIF) are saved to a file (e.g., `your_record_key_image_0.jpeg`).
--   **Text** is printed to the console.
--   Other binary or numerical data is displayed in a readable format.
-
-### Getting a specific feature
-
-To get a single feature from a record by its key:
-
-```bash
-tfd get /path/to/your/data.tfrecord:your_record_key:your_feature_name
-```
-
-The tool will attempt to automatically detect the content type, similar to the `extract` command.
-
-### TensorFlow Interoperability
-
-Read `tfd_utils` files with TensorFlow:
+## TensorFlow Interoperability
 
 ```python
 import tensorflow as tf
@@ -126,31 +124,6 @@ dataset = tf.data.TFRecordDataset("data.tfrecord")
 for record in dataset:
     example = tf.train.Example()
     example.ParseFromString(record.numpy())
-    # Process as usual...
-```
-
-### Advanced Usage
-
-#### Custom Key Feature
-
-Use a different feature as the key (default is 'key'):
-
-```python
-reader = TFRecordRandomAccess("file.tfrecord", key_feature_name="id")
-```
-
-#### Custom Index Caching
-
-Specify a custom index location:
-
-```python
-reader = TFRecordRandomAccess(
-    "file.tfrecord",
-    index_file="my_custom_index.cache"
-)
-
-# Force rebuild index if data changes (usually not needed)
-reader.rebuild_index()
 ```
 
 ## License
