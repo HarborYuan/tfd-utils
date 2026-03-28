@@ -3,10 +3,11 @@ Generate test TFRecord data for testing the random access functionality.
 """
 
 import os
-import requests
-from PIL import Image
 import io
 import json
+import tarfile
+import requests
+from PIL import Image
 from typing import List, Dict, Any
 
 
@@ -130,6 +131,60 @@ def create_test_data_with_different_key_types(output_dir: str) -> str:
     
     print(f"  Created {output_file}")
     return output_file
+
+
+def create_test_tars(output_dir: str, num_files: int = 3, records_per_file: int = 5) -> List[str]:
+    """Create uncompressed tar archives with paired .jpg and .json members.
+
+    Each record consists of two members:
+        test_{file_idx:03d}_{record_idx:04d}.jpg
+        test_{file_idx:03d}_{record_idx:04d}.json
+
+    No network calls or PIL required — fake JPEG-like bytes are used.
+
+    Returns:
+        List of paths to the created tar files.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Minimal fake JPEG: SOI marker + padding
+    fake_jpg_base = b'\xff\xd8\xff\xe0' + b'\x00' * 96
+
+    tar_files = []
+
+    for file_idx in range(num_files):
+        output_file = os.path.join(output_dir, f"test_data_{file_idx:03d}.tar")
+        tar_files.append(output_file)
+
+        print(f"Creating {output_file} with {records_per_file} records...")
+
+        with tarfile.open(output_file, 'w') as tf:
+            for record_idx in range(records_per_file):
+                key = f"test_{file_idx:03d}_{record_idx:04d}"
+
+                # .jpg member
+                jpg_data = fake_jpg_base + f"{key}".encode()
+                jpg_info = tarfile.TarInfo(name=f"{key}.jpg")
+                jpg_info.size = len(jpg_data)
+                tf.addfile(jpg_info, io.BytesIO(jpg_data))
+
+                # .json member
+                json_data = json.dumps({
+                    'key': key,
+                    'file_index': file_idx,
+                    'record_index': record_idx,
+                    'width': 100,
+                    'height': 100,
+                }).encode('utf-8')
+                json_info = tarfile.TarInfo(name=f"{key}.json")
+                json_info.size = len(json_data)
+                tf.addfile(json_info, io.BytesIO(json_data))
+
+        print(f"  Created {output_file}")
+
+    print(f"\nTar test data generation complete!")
+    print(f"Created {len(tar_files)} files with {num_files * records_per_file} total records")
+    return tar_files
 
 
 if __name__ == "__main__":
