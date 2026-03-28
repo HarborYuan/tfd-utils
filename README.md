@@ -60,6 +60,38 @@ print(f"Total records: {len(reader)}")
 Member paths with subdirectory prefixes are handled automatically:
 `./subdir/foo.jpg` → key `subdir/foo`.
 
+#### Example: SA-1B Dataset
+
+SA-1B tars are gzip-compressed and contain paired `.jpg` / `.json` files per image:
+
+```python
+import json
+from PIL import Image
+import io
+from tfd_utils import TarRandomAccess
+
+# Point to one or more SA-1B tar files (compressed tars are supported)
+reader = TarRandomAccess("/path/to/sa1b/sa_000020.tar")
+# or load multiple shards at once
+reader = TarRandomAccess("/path/to/sa1b/*.tar")
+
+# Each key is the image ID (e.g. 'sa_226692')
+keys = reader.get_keys()
+print(f"Images in this shard: {len(keys)}")
+
+key = keys[0]
+
+# Load the JPEG image
+jpg_bytes = reader.get_feature(key, "jpg")
+image = Image.open(io.BytesIO(jpg_bytes))
+
+# Load the annotation (segmentation masks, bounding boxes, …)
+json_bytes = reader.get_feature(key, "json")
+annotation = json.loads(json_bytes)
+print(f"Image size : {annotation['image']['width']}x{annotation['image']['height']}")
+print(f"Masks      : {len(annotation['annotations'])}")
+```
+
 ### Writing TFRecords
 
 ```python
