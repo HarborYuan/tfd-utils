@@ -10,6 +10,7 @@ A lightweight Python library for efficient random access to TensorFlow TFRecord 
 -   **Lightweight & Standalone**: TFRecord support requires only `numpy`, `protobuf`, and `crc32c`. No TensorFlow needed.
 -   **Full TensorFlow Compatibility**: Write with `tfd_utils`, read with TensorFlow (or vice versa). 100% compatible.
 -   **Multiple File Support**: Single files, lists of files, or glob patterns.
+-   **Tar-to-TFRecord Conversion**: CLI tool to batch-convert tar archives to TFRecord format with parallel workers and optional source deletion.
 
 ## Installation
 
@@ -145,6 +146,47 @@ reader = TarRandomAccess("*.tar", max_workers=8, use_multiprocessing=True)
 tfd list    /path/to/data.tfrecord
 tfd extract /path/to/data.tfrecord record_key
 tfd get     /path/to/data.tfrecord:record_key:feature_name
+```
+
+### Converting Tar Archives to TFRecord
+
+The `tfd convert` command converts tar archive(s) to TFRecord files. Each record stores all
+file extensions as bytes features plus a `key` feature containing the file stem.
+
+```bash
+# Convert a single tar
+tfd convert /path/to/archive.tar
+
+# Convert all tars in a directory, write to a different output directory
+tfd convert /path/to/sa1b/ --output-dir /path/to/output/
+
+# Glob pattern
+tfd convert '/path/to/sa1b/sa_0000*.tar' --output-dir /path/to/output/
+
+# Delete each source tar after successful conversion
+tfd convert /path/to/sa1b/ --output-dir /path/to/output/ --delete
+
+# Control parallelism (default: 16 workers)
+tfd convert /path/to/sa1b/ --output-dir /path/to/output/ --workers 32
+```
+
+Each input `foo.tar` produces `foo.tfrecord` in the output directory (default: same directory
+as the source). A TFRecord produced from SA-1B tars contains these features per record:
+
+| Feature | Type  | Content                          |
+|---------|-------|----------------------------------|
+| `key`   | bytes | File stem, e.g. `sa_226692`      |
+| `jpg`   | bytes | Raw JPEG image bytes             |
+| `json`  | bytes | Annotation JSON (masks, boxes…)  |
+
+```python
+from tfd_utils import TFRecordRandomAccess
+import json
+
+reader = TFRecordRandomAccess("/path/to/output/sa_000000.tfrecord")
+jpg_bytes  = reader.get_feature("sa_226692", "jpg")
+json_bytes = reader.get_feature("sa_226692", "json")
+annotation = json.loads(json_bytes)
 ```
 
 ## TensorFlow Interoperability
