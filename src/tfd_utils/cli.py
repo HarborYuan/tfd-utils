@@ -3,6 +3,7 @@ import argparse
 import os
 from .random_access import TFRecordRandomAccess
 from .pb2 import Example
+from .tar_converter import convert_tars, resolve_input_paths
 
 def list_features(args):
     """List feature names and their types of the first record in a TFRecord file."""
@@ -117,6 +118,19 @@ def get_feature(args):
     elif isinstance(feature_value, float):
         print(f"Feature '{feature_name}' (float): [{feature_value}]")
 
+def run_convert(args):
+    """Convert tar archive(s) to TFRecord files."""
+    import sys
+    paths = resolve_input_paths(args.input)
+    if not paths:
+        print(f"No tar files found for input: {args.input}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Found {len(paths)} tar file(s) to convert.")
+    if args.output_dir:
+        os.makedirs(args.output_dir, exist_ok=True)
+    convert_tars(paths, args.output_dir, args.delete, args.workers)
+
+
 def main():
     """Main entry point for the tfd-utils CLI."""
     parser = argparse.ArgumentParser(description="TFRecord Utilities CLI")
@@ -137,6 +151,34 @@ def main():
     parser_get = subparsers.add_parser('get', help="Extract a single feature from a record by key")
     parser_get.add_argument('spec', help="Specification in the format 'path:key:feature_name'")
     parser_get.set_defaults(func=get_feature)
+
+    # 'convert' command
+    parser_convert = subparsers.add_parser(
+        'convert',
+        help="Convert tar archive(s) to TFRecord file(s)",
+    )
+    parser_convert.add_argument(
+        'input',
+        help="Tar file, directory of tar files, or glob pattern (e.g. '/data/sa1b/*.tar')",
+    )
+    parser_convert.add_argument(
+        '--output-dir', '-o',
+        default=None,
+        help="Directory to write TFRecord files (default: same directory as each source tar)",
+    )
+    parser_convert.add_argument(
+        '--delete', '-d',
+        action='store_true',
+        default=False,
+        help="Delete each source tar after successful conversion",
+    )
+    parser_convert.add_argument(
+        '--workers', '-w',
+        type=int,
+        default=16,
+        help="Number of parallel worker processes (default: 16)",
+    )
+    parser_convert.set_defaults(func=run_convert)
 
     args = parser.parse_args()
     args.func(args)
