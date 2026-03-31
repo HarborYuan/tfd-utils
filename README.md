@@ -11,6 +11,7 @@ A lightweight Python library for efficient random access to TensorFlow TFRecord 
 -   **Full TensorFlow Compatibility**: Write with `tfd_utils`, read with TensorFlow (or vice versa). 100% compatible.
 -   **Multiple File Support**: Single files, lists of files, or glob patterns.
 -   **Tar-to-TFRecord Conversion**: CLI tool to batch-convert tar archives to TFRecord format with parallel workers and optional source deletion.
+-   **Claude Code Skill**: One-command install (`tfd install-skill`) to enable AI assistance with the library in any project.
 
 ## Installation
 
@@ -147,6 +148,16 @@ tfd list    /path/to/data.tfrecord
 tfd extract /path/to/data.tfrecord record_key
 tfd get     /path/to/data.tfrecord:record_key:feature_name
 ```
+
+### Claude Code Skill
+
+Install the tfd-utils skill for Claude Code to get AI assistance with the library in any project:
+
+```bash
+tfd install-skill
+```
+
+This copies a skill file to `~/.claude/skills/tfd-utils/SKILL.md`, enabling Claude to assist with TFRecord and tar access, the CLI, and best practices.
 
 ### Converting Tar Archives to TFRecord
 
