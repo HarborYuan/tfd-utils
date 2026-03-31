@@ -1,6 +1,8 @@
 
 import argparse
 import os
+import shutil
+from pathlib import Path
 from .random_access import TFRecordRandomAccess
 from .pb2 import Example
 from .tar_converter import convert_tars, resolve_input_paths
@@ -118,6 +120,17 @@ def get_feature(args):
     elif isinstance(feature_value, float):
         print(f"Feature '{feature_name}' (float): [{feature_value}]")
 
+def install_skill(args):
+    """Install the tfd-utils Claude Code skill to ~/.claude/skills/tfd-utils/."""
+    src = Path(__file__).parent / "skills" / "SKILL.md"
+    dest_dir = Path.home() / ".claude" / "skills" / "tfd-utils"
+    dest = dest_dir / "SKILL.md"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    print(f"Skill installed to {dest}")
+    print("Claude will now assist with tfd-utils in any project.")
+
+
 def run_convert(args):
     """Convert tar archive(s) to TFRecord files."""
     import sys
@@ -179,6 +192,13 @@ def main():
         help="Number of parallel worker processes (default: 16)",
     )
     parser_convert.set_defaults(func=run_convert)
+
+    # 'install-skill' command
+    parser_skill = subparsers.add_parser(
+        'install-skill',
+        help="Install the tfd-utils Claude Code skill to ~/.claude/skills/tfd-utils/",
+    )
+    parser_skill.set_defaults(func=install_skill)
 
     args = parser.parse_args()
     args.func(args)
