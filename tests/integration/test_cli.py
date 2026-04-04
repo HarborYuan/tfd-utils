@@ -1,5 +1,6 @@
 
 import os
+import shutil
 import subprocess
 import pytest
 from tests.helpers.generate_test_data import create_test_tfrecords
@@ -12,15 +13,8 @@ def test_data():
     create_test_tfrecords(test_data_dir, num_files, records_per_file)
     yield test_data_dir
     # Cleanup
-    for file_idx in range(num_files):
-        tfrecord_file = os.path.join(test_data_dir, f"test_data_{file_idx:03d}.tfrecord")
-        index_file = os.path.splitext(tfrecord_file)[0] + ".index"
-        if os.path.exists(tfrecord_file):
-            os.remove(tfrecord_file)
-        if os.path.exists(index_file):
-            os.remove(index_file)
     if os.path.exists(test_data_dir):
-        os.rmdir(test_data_dir)
+        shutil.rmtree(test_data_dir)
 
 def test_cli_list_features(test_data):
     tfrecord_file = os.path.join(test_data, "test_data_000.tfrecord")
