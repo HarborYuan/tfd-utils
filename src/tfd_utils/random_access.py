@@ -5,10 +5,10 @@ This module provides a class for efficient random access to TFRecord files.
 It builds an index on first access and caches it for subsequent lookups.
 """
 
-import fcntl
 import os
 import pickle
 import glob
+import time
 from typing import Dict, Any, Optional, List, Union, BinaryIO
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -277,29 +277,60 @@ class TFRecordRandomAccess:
         """Load index from cache file, or build it if missing/stale.
 
         When multiple processes start simultaneously on a fresh dataset, only one
-        should build the index while the others wait.  We use an exclusive
-        ``fcntl`` lock on a companion ``.lock`` file to coordinate:
+        should build the index while the others wait.  We use atomic O_CREAT|O_EXCL
+        file creation as the locking primitive — this works on network filesystems
+        (NFS, CIFS, distributed storage) where fcntl.flock is not supported.
 
         1. Fast path  — index already valid → load and return immediately (no lock).
         2. Slow path  — index missing or stale:
-           a. Acquire exclusive lock (blocks until the lock is free).
-           b. Double-check validity (another process may have just built it).
-           c. If still stale, build and save atomically.
-           d. Release lock.
+           a. Try to create the .lock file exclusively (atomic on all POSIX fs).
+           b. If creation succeeds we hold the lock: double-check, build if needed,
+              save atomically, then remove the lock file.
+           c. If creation fails (FileExistsError) another process is building:
+              wait _POLL_INTERVAL seconds and retry.  If the lock file is older
+              than _LOCK_TIMEOUT seconds it is considered stale and removed.
         """
+        _POLL_INTERVAL = 2.0   # seconds between polls while waiting
+        _LOCK_TIMEOUT  = 3600  # seconds before a lock is considered stale
+
         # Fast path: no lock needed
         if self._is_index_valid():
             print(f"Loading index from {self.index_file}")
             with open(self.index_file, 'rb') as f:
                 return pickle.load(f)
 
-        # Slow path: acquire exclusive lock before building
         lock_path = self.index_file + '.lock'
-        with open(lock_path, 'w') as lock_fd:
-            print(f"Acquiring index build lock: {lock_path}")
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        while True:
+            # Try to atomically create the lock file
             try:
-                # Double-check: another process may have built the index while we waited
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+            except FileExistsError:
+                # Another process holds the lock — check for stale lock first
+                try:
+                    lock_age = time.time() - os.path.getmtime(lock_path)
+                    if lock_age > _LOCK_TIMEOUT:
+                        print(f"Removing stale lock (age {lock_age:.0f}s): {lock_path}")
+                        os.unlink(lock_path)
+                        continue
+                except FileNotFoundError:
+                    continue  # Lock was released between our checks; retry immediately
+
+                # Index may have been built while we were waiting
+                if self._is_index_valid():
+                    print(f"Loading index from {self.index_file} (built by another process)")
+                    with open(self.index_file, 'rb') as f:
+                        return pickle.load(f)
+
+                print(f"Waiting for index build lock: {lock_path}")
+                time.sleep(_POLL_INTERVAL)
+                continue
+
+            # We hold the lock — build the index, then release
+            try:
+                # Double-check: another process may have finished just before us
                 if self._is_index_valid():
                     print(f"Loading index from {self.index_file} (built by another process)")
                     with open(self.index_file, 'rb') as f:
@@ -307,7 +338,10 @@ class TFRecordRandomAccess:
                 print("Index cache is invalid or missing, rebuilding...")
                 return self._build_index()
             finally:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                try:
+                    os.unlink(lock_path)
+                except FileNotFoundError:
+                    pass
     
     @property
     def index(self) -> Dict[str, Dict[str, Any]]:
