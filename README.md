@@ -2,6 +2,22 @@
 
 A lightweight Python library for efficient random access to TensorFlow TFRecord files and tar archives, without requiring TensorFlow.
 
+## Upgrade Notice — v0.4.3
+
+**Versions before 0.4.3 have a critical concurrency bug: when multiple processes build the index simultaneously, they can corrupt the `.index` file, causing `UnpicklingError` on the next run.**
+
+v0.4.3 fixes this with two changes:
+
+- **Exclusive build lock** — only one process builds the index at a time; others wait and then reuse the result.
+- **Atomic index write** — the index is written to a `.tmp` file and renamed into place, so a killed process can never leave a half-written index behind.
+
+If you hit `_pickle.UnpicklingError` on an existing dataset, delete the stale `.index` files and upgrade:
+
+```bash
+rm /path/to/data/*.index
+pip install --upgrade tfd-utils
+```
+
 ## Key Features
 
 -   **Unified API**: Access TFRecord files and tar archives through the same interface.
