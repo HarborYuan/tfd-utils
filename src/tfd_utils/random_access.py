@@ -5,6 +5,7 @@ This module provides a class for efficient random access to TFRecord files.
 It builds an index on first access and caches it for subsequent lookups.
 """
 
+import fcntl
 import os
 import pickle
 import glob
@@ -214,41 +215,50 @@ class TFRecordRandomAccess:
         else:
             return self._build_index_sequential()
     
+    def _save_index(self, index: Dict[str, Dict[str, Any]]) -> None:
+        """Save index atomically: write to a .tmp file then rename into place.
+
+        Writing directly to the final path risks a partially-written file if the
+        process is killed mid-write.  A rename is atomic on POSIX filesystems, so
+        readers will always see either the old complete index or the new complete
+        one — never a half-written file.
+        """
+        tmp_path = self.index_file + '.tmp'
+        with open(tmp_path, 'wb') as f:
+            pickle.dump(index, f)
+        os.replace(tmp_path, self.index_file)
+        print(f"Index saved to {self.index_file}")
+
     def _build_index_sequential(self) -> Dict[str, Dict[str, Any]]:
         """Build index sequentially (original method)."""
         index = {}
         total_records = 0
-        
+
         for tfrecord_file in self.tfrecord_files:
             file_index = _process_single_tfrecord(tfrecord_file, self.key_feature_name, self.progress_interval)
             index.update(file_index)
             total_records += len(file_index)
-        
+
         print(f"Total records indexed: {total_records}")
-        
-        # Save the index to cache file
-        with open(self.index_file, 'wb') as f:
-            pickle.dump(index, f)
-        print(f"Index saved to {self.index_file}")
-        
+        self._save_index(index)
         return index
-    
+
     def _build_index_parallel(self) -> Dict[str, Dict[str, Any]]:
         """Build index using multiprocessing for parallel file processing."""
         print(f"Using {self.max_workers} worker processes for parallel indexing...")
-        
+
         index = {}
         total_records = 0
-        
+
         with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
             # Submit all files for processing - use optimized function
-            process_func = partial(_process_single_tfrecord, 
+            process_func = partial(_process_single_tfrecord,
                                  key_feature_name=self.key_feature_name,
                                  progress_interval=self.progress_interval)
-            
-            future_to_file = {executor.submit(process_func, tfrecord_file): tfrecord_file 
+
+            future_to_file = {executor.submit(process_func, tfrecord_file): tfrecord_file
                              for tfrecord_file in self.tfrecord_files}
-            
+
             # Collect results as they complete
             for future in as_completed(future_to_file):
                 tfrecord_file = future_to_file[future]
@@ -258,25 +268,46 @@ class TFRecordRandomAccess:
                     total_records += len(file_index)
                 except Exception as e:
                     print(f"Error processing {tfrecord_file}: {e}")
-        
+
         print(f"Total records indexed: {total_records}")
-        
-        # Save the index to cache file
-        with open(self.index_file, 'wb') as f:
-            pickle.dump(index, f)
-        print(f"Index saved to {self.index_file}")
-        
+        self._save_index(index)
         return index
-    
+
     def _load_index(self) -> Dict[str, Dict[str, Any]]:
-        """Load index from cache file or build if not exists."""
+        """Load index from cache file, or build it if missing/stale.
+
+        When multiple processes start simultaneously on a fresh dataset, only one
+        should build the index while the others wait.  We use an exclusive
+        ``fcntl`` lock on a companion ``.lock`` file to coordinate:
+
+        1. Fast path  — index already valid → load and return immediately (no lock).
+        2. Slow path  — index missing or stale:
+           a. Acquire exclusive lock (blocks until the lock is free).
+           b. Double-check validity (another process may have just built it).
+           c. If still stale, build and save atomically.
+           d. Release lock.
+        """
+        # Fast path: no lock needed
         if self._is_index_valid():
             print(f"Loading index from {self.index_file}")
             with open(self.index_file, 'rb') as f:
                 return pickle.load(f)
-        else:
-            print("Index cache is invalid or missing, rebuilding...")
-            return self._build_index()
+
+        # Slow path: acquire exclusive lock before building
+        lock_path = self.index_file + '.lock'
+        with open(lock_path, 'w') as lock_fd:
+            print(f"Acquiring index build lock: {lock_path}")
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                # Double-check: another process may have built the index while we waited
+                if self._is_index_valid():
+                    print(f"Loading index from {self.index_file} (built by another process)")
+                    with open(self.index_file, 'rb') as f:
+                        return pickle.load(f)
+                print("Index cache is invalid or missing, rebuilding...")
+                return self._build_index()
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
     
     @property
     def index(self) -> Dict[str, Dict[str, Any]]:
