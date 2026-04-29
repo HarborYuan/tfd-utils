@@ -122,13 +122,36 @@ def get_feature(args):
 
 def install_skill(args):
     """Install the tfd-utils Claude Code skill to ~/.claude/skills/tfd-utils/."""
+    from . import __version__
     src = Path(__file__).parent / "skills" / "SKILL.md"
     dest_dir = Path.home() / ".claude" / "skills" / "tfd-utils"
     dest = dest_dir / "SKILL.md"
     dest_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dest)
-    print(f"Skill installed to {dest}")
+    content = src.read_text(encoding="utf-8").replace("{{VERSION}}", __version__)
+    dest.write_text(content, encoding="utf-8")
+    print(f"Skill installed to {dest} (tfd-utils v{__version__})")
     print("Claude will now assist with tfd-utils in any project.")
+
+
+def run_prebuild(args):
+    """Pre-build .index files for one or more TFRecord files (no training needed)."""
+    import sys
+    import time
+    import multiprocessing
+    from .random_access import TFRecordRandomAccess
+
+    workers = args.workers if args.workers is not None else max(multiprocessing.cpu_count() * 2, 32)
+    print(f"Pre-building TFRecord index for: {args.path}")
+    print(f"Using {workers} worker processes (override with --workers / -w).")
+    t0 = time.time()
+    reader = TFRecordRandomAccess(args.path, max_workers=workers)
+    elapsed = time.time() - t0
+    stats = reader.get_stats()
+    print(
+        f"Done in {elapsed:.1f}s. "
+        f"files={stats.get('total_files', '?')}  records={stats.get('total_records', '?')}"
+    )
+    print("Subsequent training runs will reuse the cached .index files (mtime-checked).")
 
 
 def run_convert(args):
@@ -199,6 +222,23 @@ def main():
         help="Install the tfd-utils Claude Code skill to ~/.claude/skills/tfd-utils/",
     )
     parser_skill.set_defaults(func=install_skill)
+
+    # 'prebuild' command
+    parser_prebuild = subparsers.add_parser(
+        'prebuild',
+        help="Pre-build .index for TFRecord file(s) before training (avoids long startup hang)",
+    )
+    parser_prebuild.add_argument(
+        'path',
+        help="TFRecord file, directory, or glob (e.g. '/path/to/shards/*.tfrecord')",
+    )
+    parser_prebuild.add_argument(
+        '--workers', '-w',
+        type=int,
+        default=None,
+        help="Parallel worker processes (default: 2x CPU count, min 32)",
+    )
+    parser_prebuild.set_defaults(func=run_prebuild)
 
     args = parser.parse_args()
     args.func(args)

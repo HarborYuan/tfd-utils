@@ -1,11 +1,14 @@
 ---
 name: tfd-utils
 description: Help users write code with the tfd-utils library — reading TFRecord files, reading tar archives, writing TFRecords, and using the tfd CLI. Trigger when the user imports tfd_utils, asks about TFRecord or tar random access, or asks about the tfd CLI.
+version: {{VERSION}}
 ---
 
 ## tfd-utils
 
 Lightweight Python library for random access to TFRecord files and tar archives. No TensorFlow required.
+
+> **Skill version:** bundled with `tfd-utils` **v{{VERSION}}** (installed via `tfd install-skill`). To refresh: `pip install -U tfd-utils && tfd install-skill`. Check the installed library version at runtime with `python -c "import tfd_utils; print(tfd_utils.__version__)"`.
 
 ```bash
 pip install tfd-utils
@@ -22,17 +25,37 @@ On the first `TFRecordRandomAccess(path)` call, the library scans the file(s) on
 Every `get_feature` / `get_record` / `reader[key]` call seeks directly to the record's offset in the file — no scanning, no loading the whole file into memory.
 
 **Pre-build the index before training (important for large datasets):**
-If a dataset has many records or many shards, the index build can block training startup for minutes. Always pre-build the index as a separate step before launching training:
+If a dataset has many records or many shards, the index build can block training startup for minutes. Always pre-build the index as a separate step before launching training. The recommended way is the dedicated CLI:
 
 ```bash
-# Single file — tfd list triggers index build as a side effect
-tfd list /path/to/data.tfrecord
+# Default — recommended. Single file, directory, or glob.
+tfd prebuild '/path/to/shards/*.tfrecord'
 
-# Multiple shards — build all indexes in parallel via Python
-python -c "from tfd_utils import TFRecordRandomAccess; TFRecordRandomAccess('/path/to/shards/*.tfrecord')"
+# Bump concurrency on a fat CPU node (default is 2× CPU count, min 32)
+tfd prebuild '/path/to/shards/*.tfrecord' --workers 128
 ```
 
-The second form builds indexes for all matched files in parallel (using `ProcessPoolExecutor`) and exits. Subsequent training runs reuse the cached indexes and start immediately.
+Equivalent escape hatches (use only if you cannot run the CLI):
+
+```bash
+tfd list /path/to/data.tfrecord                       # single-file side effect
+python -c "from tfd_utils import TFRecordRandomAccess; TFRecordRandomAccess('/path/to/shards/*.tfrecord', max_workers=128)"
+```
+
+`tfd prebuild` builds indexes for all matched files in parallel (`ProcessPoolExecutor`), prints elapsed time + record count, and exits. Subsequent training runs reuse the cached `.index` files and start immediately.
+
+> **Large datasets: never let the training script build the index.**
+> For datasets with thousands of shards or hundreds of millions of records, the first-time index build can take **tens of minutes to hours**. If you only construct `TFRecordRandomAccess(...)` inside your training entrypoint, the job will appear to *hang* with no progress, occupy GPUs while doing pure CPU/IO work, and — under multi-process / multi-rank launches (torchrun, accelerate, etc.) — every rank may race to build the same index, multiplying the cost and risking corruption.
+>
+> **Recommended workflow for large datasets:**
+> 1. Run a one-shot pre-build step on a CPU node (or login node) **before** submitting the training job:
+>    ```bash
+>    tfd prebuild '/path/to/shards/*.tfrecord' --workers 128
+>    ```
+> 2. Verify `.index` files exist next to every shard (`ls /path/to/shards/*.index | wc -l` should match shard count).
+> 3. Only then launch training. The reader will detect existing `.index` files via mtime and skip rebuilding.
+>
+> Treat the index like a dataset preprocessing artifact — build it once, commit/cache it, reuse forever. Do not couple it to the training script's lifecycle.
 
 If the user sees slow access after the index was already built, suggest checking that the `.index` file exists next to the data file, or call `reader.rebuild_index()`.
 
@@ -122,6 +145,10 @@ Files written by tfd-utils are readable by `tf.data.TFRecordDataset` and vice ve
 tfd list    data.tfrecord                          # list features of first record
 tfd extract data.tfrecord record_key               # extract a record (saves images to disk)
 tfd get     data.tfrecord:record_key:feature_name  # get single feature
+
+# Pre-build .index files for fast training startup (recommended for large datasets)
+tfd prebuild '/path/to/shards/*.tfrecord'
+tfd prebuild '/path/to/shards/*.tfrecord' --workers 128
 
 # Convert tar archives to TFRecord
 tfd convert /path/to/archive.tar

@@ -930,7 +930,7 @@ wheels = [
 
 [[package]]
 name = "tfd-utils"
-version = "0.4.2"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "crc32c" },
