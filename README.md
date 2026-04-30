@@ -3,7 +3,7 @@
 Lightweight Python library for **O(1) random access** to TensorFlow TFRecord files and tar archives. No TensorFlow dependency required for the core library.
 
 - Unified API for TFRecord and tar (read by key in O(1))
-- Index built once and cached to disk; rebuilt automatically on file change
+- Index built once and cached to disk; auto-rebuilt when the shard count changes (count is encoded in the cache filename)
 - 100% wire-compatible with `tf.data.TFRecordDataset` (read either direction)
 - Multi-file / glob support, parallel index build
 - `tfd` CLI: `list`, `extract`, `get`, `convert`, `prebuild`, `install-skill`
@@ -92,7 +92,7 @@ Verify the indexes exist before submitting the training job:
 ls /path/to/shards/*.index | wc -l   # should equal shard count
 ```
 
-Subsequent runs reuse the cached `.index` files (mtime-checked) and start instantly.
+Subsequent runs reuse the cached index file and start instantly. The auto-generated cache name encodes the shard count (`all<N>.index` for complete `XXXXX_of_NNNNN.tfrecord` shard sets, otherwise `<first_stem>_unified_tot<N>.index`), so a changed shard count automatically routes to a fresh path and triggers a rebuild — no mtime checks involved.
 
 > **Programmatic equivalent** (only if you cannot run the CLI):
 > ```python
@@ -226,6 +226,13 @@ pip install -U tfd-utils && tfd install-skill
 ---
 
 ## Version notes
+
+### v1.2.0
+
+- **Count-encoded index filenames** — auto-generated index paths now embed the shard count. For a complete `XXXXX_of_NNNNN.tfrecord` shard set, the cache is named `all<N>.index` (where `N = NNNNN + 1`). Otherwise it falls back to `<first_stem>_unified_tot<N>.index`. Single-file readers still use `<stem>.index`. Validity is now a pure existence check on this path — `mtime` is no longer consulted.
+- **HDFS-friendly build lock** — the `<index>.lock` file now stores `<owner>|<heartbeat_ns>` as text content (filesystem mtime is not trusted on shared/network FS). The lock holder spawns a daemon heartbeat thread that refreshes the timestamp every 30s; other processes treat the lock as stale after 5 min without an update. After acquiring the lock, the holder waits 1s and re-reads the file to verify the owner field still matches its own — defends against non-atomic `O_CREAT|O_EXCL` on HDFS.
+- Stress-tested on HDFS with 168 concurrent workers across 6 rounds: every round saw exactly one builder, no overlapping build intervals, all workers loaded the complete key set.
+- **Cache compatibility:** existing v1.0.0 / v1.1.0 indexes will be orphaned by the new naming scheme and rebuilt once on first access. Old caches can be safely deleted: `rm /path/to/data/*.index`.
 
 ### v1.0.0
 

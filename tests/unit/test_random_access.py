@@ -14,7 +14,7 @@ import json
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
-from tfd_utils.random_access import TFRecordRandomAccess
+from tfd_utils.random_access import TFRecordRandomAccess, _detect_complete_shard_set
 from tests.helpers.generate_test_data import create_test_tfrecords, create_test_data_with_different_key_types
 
 
@@ -242,147 +242,110 @@ class TestTFRecordRandomAccess:
         assert len(reader.index) == 15
     
     def test_is_index_valid(self, test_data_dir):
-        """Test _is_index_valid method with various scenarios."""
+        """_is_index_valid is now a pure existence check on the index file path."""
         test_dir, tfrecord_files, _ = test_data_dir
-        
-        # Test case 1: Index file doesn't exist
+
         reader = TFRecordRandomAccess(tfrecord_files)
-        # Make sure index file doesn't exist
+
+        # Missing → invalid
         if os.path.exists(reader.index_file):
             os.remove(reader.index_file)
-        
-        assert not reader._is_index_valid()
-        
-        # Test case 2: Index file exists and is valid
-        # Build the index first
-        _ = reader.index
-        assert reader._is_index_valid()
-        
-        # Test case 3: TFRecord file is newer than index
-        import time
-        time.sleep(0.1)  # Small delay to ensure different timestamps
-        
-        # Touch the first TFRecord file to make it newer
-        os.utime(tfrecord_files[0])
-        assert not reader._is_index_valid()
-        
-        # Rebuild index
-        reader.rebuild_index()
-        assert reader._is_index_valid()
-        
-        # Test case 4: TFRecord file doesn't exist
-        # Create a reader with a non-existent file in the list
-        temp_file = os.path.join(test_dir, "temp_file.tfrecord")
-        with open(temp_file, 'w') as f:
-            f.write("dummy")
-        
-        reader_with_temp = TFRecordRandomAccess([tfrecord_files[0], temp_file])
-        # Build index first
-        try:
-            _ = reader_with_temp.index
-        except:
-            # Index building might fail, but that's ok for this test
-            pass
-        
-        # Remove the temp file
-        os.remove(temp_file)
-        
-        # Now _is_index_valid should return False because temp_file doesn't exist
-        if os.path.exists(reader_with_temp.index_file):
-            assert not reader_with_temp._is_index_valid()
-    
-    def test_is_index_valid_many_files(self, test_data_dir):
-        """Test _is_index_valid with many files (>5) to test optimization path."""
-        test_dir, tfrecord_files, _ = test_data_dir
-        
-        # Create additional TFRecord files to have more than 5 total
-        additional_files = []
-        for i in range(3, 8):  # Create 5 more files (total will be 8)
-            additional_file = os.path.join(test_dir, f"additional_{i}.tfrecord")
-            # Copy an existing file to create a valid TFRecord
-            shutil.copy2(tfrecord_files[0], additional_file)
-            additional_files.append(additional_file)
-        
-        all_files = tfrecord_files + additional_files
-        
-        reader = TFRecordRandomAccess(all_files)
-        
-        # Build index first
-        _ = reader.index
-        assert reader._is_index_valid()
-        
-        # Test parent directory modification time check
-        import time
-        time.sleep(0.51) # should > 0.5 seconds to trigger the parent directory check
-        
-        # Touch the parent directory to make it newer
-        parent_dir = os.path.dirname(all_files[0])
-        # Create a new file in the directory to change its mtime
-        dummy_file = os.path.join(parent_dir, "dummy_file.txt")
-        with open(dummy_file, 'w') as f:
-            f.write("dummy")
-        # This should return False because parent directory is newer
-        assert not reader._is_index_valid()
-        _ = reader.rebuild_index()  # Rebuild index after parent directory change
-        assert reader._is_index_valid()
-        
-        # Clean up
-        os.remove(dummy_file)
-        for f in additional_files:
-            if os.path.exists(f):
-                os.remove(f)
-    
-    def test_is_index_valid_few_files(self, test_data_dir):
-        """Test _is_index_valid with few files (<=5) to test the regular path."""
-        test_dir, tfrecord_files, _ = test_data_dir
-        
-        # Use only 3 files (<=5)
-        reader = TFRecordRandomAccess(tfrecord_files[:3])
-        
-        # Build index first
-        _ = reader.index
-        assert reader._is_index_valid()
-        
-        # Touch one of the files to make it newer
-        import time
-        time.sleep(0.1)
-        os.utime(tfrecord_files[1])
-        
-        # This should return False because one of the files is newer
         assert not reader._is_index_valid()
 
-    def test_optimization_path(self, test_data_dir):
-        """Test _is_index_valid with optimization path (more than 5 files)."""
-        test_dir, tfrecord_files, _ = test_data_dir
-        
-        # Create additional TFRecord files to have more than 5 total
-        additional_files = []
-        for i in range(3, 8):  # Create 5 more files (total will be 8)
-            additional_file = os.path.join(test_dir, f"additional_{i}.tfrecord")
-            # Copy an existing file to create a valid TFRecord
-            shutil.copy2(tfrecord_files[0], additional_file)
-            additional_files.append(additional_file)
-        
-        all_files = tfrecord_files + additional_files
-        
-        reader = TFRecordRandomAccess(all_files)
-        
-        # Build index first
+        # Built → valid
         _ = reader.index
         assert reader._is_index_valid()
-        
-        # Touch one of the additional files to make it newer
-        import time
-        time.sleep(0.1)
-        os.utime(additional_files[0])
-        
-        # This should return False because one of the additional files is newer
-        assert not reader._is_index_valid()
-        
-        # Clean up
-        for f in additional_files:
-            if os.path.exists(f):
-                os.remove(f)
+
+        # Touching source files no longer invalidates the index — mtime is
+        # intentionally not checked under the new naming scheme.
+        time.sleep(0.05)
+        os.utime(tfrecord_files[0])
+        assert reader._is_index_valid()
+
+    def test_index_file_naming_single(self, test_data_dir):
+        """Single-file reader: index path is <stem>.index."""
+        _, tfrecord_files, _ = test_data_dir
+        reader = TFRecordRandomAccess(tfrecord_files[0])
+        expected = str(Path(tfrecord_files[0]).with_suffix('.index'))
+        assert reader.index_file == expected
+
+    def test_index_file_naming_unified_tot(self, test_data_dir):
+        """Multi-file reader without shard pattern: <first_stem>_unified_tot<N>.index."""
+        test_dir, tfrecord_files, _ = test_data_dir
+        reader = TFRecordRandomAccess(tfrecord_files)
+        first_stem = Path(tfrecord_files[0]).stem
+        n = len(tfrecord_files)
+        assert reader.index_file == os.path.join(test_dir, f"{first_stem}_unified_tot{n}.index")
+
+    def test_index_file_naming_all_shards(self, tmp_path):
+        """Complete shard set XXXXX_of_NNNNN.tfrecord → all<NNNNN+1>.index."""
+        # Create 4 empty shards: 00000_of_00003 .. 00003_of_00003 (total = 4)
+        shards = []
+        for i in range(4):
+            p = tmp_path / f"{i:05d}_of_{3:05d}.tfrecord"
+            p.write_bytes(b"")
+            shards.append(str(p))
+
+        reader = TFRecordRandomAccess(shards)
+        assert reader.index_file == str(tmp_path / "all4.index")
+
+    def test_index_file_naming_incomplete_shards_falls_back(self, tmp_path):
+        """Missing a shard → not a complete set → fall back to _unified_tot<N>.index."""
+        # 3 of 4 shards present
+        shards = []
+        for i in [0, 1, 3]:
+            p = tmp_path / f"{i:05d}_of_{3:05d}.tfrecord"
+            p.write_bytes(b"")
+            shards.append(str(p))
+
+        reader = TFRecordRandomAccess(shards)
+        first_stem = Path(shards[0]).stem
+        assert reader.index_file == str(tmp_path / f"{first_stem}_unified_tot3.index")
+
+    def test_index_path_changes_when_file_count_changes(self, tmp_path):
+        """File count is encoded in the path: adding/removing files routes to a fresh path."""
+        f1 = tmp_path / "a.tfrecord"; f1.write_bytes(b"")
+        f2 = tmp_path / "b.tfrecord"; f2.write_bytes(b"")
+        f3 = tmp_path / "c.tfrecord"; f3.write_bytes(b"")
+
+        r2 = TFRecordRandomAccess([str(f1), str(f2)])
+        r3 = TFRecordRandomAccess([str(f1), str(f2), str(f3)])
+        assert r2.index_file != r3.index_file
+        assert "_tot2.index" in r2.index_file
+        assert "_tot3.index" in r3.index_file
+
+
+class TestDetectCompleteShardSet:
+    """Direct unit tests for the shard-pattern detector."""
+
+    def test_complete_set(self, tmp_path):
+        files = [str(tmp_path / f"{i:05d}_of_{2:05d}.tfrecord") for i in range(3)]
+        assert _detect_complete_shard_set(files) == 3
+
+    def test_complete_set_user_example(self, tmp_path):
+        # 00000_of_09999 → all 10000 shards present → returns 10000
+        files = [str(tmp_path / f"{i:05d}_of_09999.tfrecord") for i in range(10000)]
+        assert _detect_complete_shard_set(files) == 10000
+
+    def test_missing_shard(self, tmp_path):
+        files = [str(tmp_path / f"{i:05d}_of_{2:05d}.tfrecord") for i in (0, 2)]
+        assert _detect_complete_shard_set(files) is None
+
+    def test_inconsistent_total(self, tmp_path):
+        files = [
+            str(tmp_path / "00000_of_00002.tfrecord"),
+            str(tmp_path / "00001_of_00003.tfrecord"),
+        ]
+        assert _detect_complete_shard_set(files) is None
+
+    def test_non_shard_filenames(self, tmp_path):
+        files = [str(tmp_path / "test_data_000.tfrecord")]
+        assert _detect_complete_shard_set(files) is None
+
+    def test_handles_compound_extension(self, tmp_path):
+        # The pattern only requires a leading dot, so compound extensions still match.
+        files = [str(tmp_path / f"{i:05d}_of_{1:05d}.tar.gz") for i in range(2)]
+        assert _detect_complete_shard_set(files) == 2
 
 
 if __name__ == "__main__":

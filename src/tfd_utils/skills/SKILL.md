@@ -19,7 +19,16 @@ pip install tfd-utils
 **TFRecord is the recommended format for training.** Tar support is transitional — use it to inspect raw archives, then convert to TFRecord before actual training.
 
 **Phase 1 — Index build (first access only, slow):**
-On the first `TFRecordRandomAccess(path)` call, the library scans the file(s) once to record each record's byte offset and length. This is saved to `<file>.index` on disk. For large datasets this can take minutes — that's expected. Multiple files are indexed in parallel. The index is reused on all subsequent runs and only rebuilt when the source file changes (mtime check).
+On the first `TFRecordRandomAccess(path)` call, the library scans the file(s) once to record each record's byte offset and length. This is saved on disk and reused on subsequent runs. For large datasets the build can take minutes — that's expected. Multiple files are indexed in parallel.
+
+The auto-generated cache filename **encodes the shard count** so validity is just a path-existence check (no mtime is consulted):
+- Single file → `<stem>.index`
+- Complete `XXXXX_of_NNNNN.tfrecord` shard set → `<parent>/all<N>.index` (where `N = NNNNN + 1`)
+- Otherwise → `<parent>/<first_stem>_unified_tot<N>.index`
+
+If the shard count changes, the auto-path differs and a fresh build is triggered. If you need to force a rebuild, delete the cache file or call `reader.rebuild_index()`.
+
+When multiple processes start simultaneously on the same dataset, only one builds; the others wait on a `<index>.lock` file and load the result. The lock uses a content-stored heartbeat (refreshed every 30s, considered stale after 5 min) and a verify-after-write step, so it works on shared/network filesystems including HDFS where `mtime` and `O_CREAT|O_EXCL` are not fully trustworthy.
 
 **Phase 2 — O(1) random access (all subsequent access, fast):**
 Every `get_feature` / `get_record` / `reader[key]` call seeks directly to the record's offset in the file — no scanning, no loading the whole file into memory.
@@ -52,12 +61,12 @@ python -c "from tfd_utils import TFRecordRandomAccess; TFRecordRandomAccess('/pa
 >    ```bash
 >    tfd prebuild '/path/to/shards/*.tfrecord' --workers 128
 >    ```
-> 2. Verify `.index` files exist next to every shard (`ls /path/to/shards/*.index | wc -l` should match shard count).
-> 3. Only then launch training. The reader will detect existing `.index` files via mtime and skip rebuilding.
+> 2. Verify the index cache exists. For a complete `XXXXX_of_NNNNN.tfrecord` shard set, look for `all<N>.index` in the parent directory (where `N = NNNNN + 1`). For other naming conventions, look for `<first_stem>_unified_tot<N>.index`.
+> 3. Only then launch training. The reader will detect the existing cache file (existence check on the count-encoded path — no mtime involved) and skip rebuilding.
 >
 > Treat the index like a dataset preprocessing artifact — build it once, commit/cache it, reuse forever. Do not couple it to the training script's lifecycle.
 
-If the user sees slow access after the index was already built, suggest checking that the `.index` file exists next to the data file, or call `reader.rebuild_index()`.
+If the user sees slow access after the index was already built, suggest checking that the cache file exists in the parent directory (`all<N>.index` for shard sets, `<first_stem>_unified_tot<N>.index` otherwise, or `<stem>.index` for a single file), or call `reader.rebuild_index()`.
 
 **Tar does NOT provide O(1) access.** `TarRandomAccess` stores byte offsets in a similar index, but compressed tars (`.tar.gz` etc.) require decompressing from the beginning for backward seeks — access time is O(position). Use tar only for data exploration or one-off reads. For training pipelines, always convert first:
 
@@ -80,7 +89,7 @@ print(len(reader))                    # total record count
 ```
 
 - Default key feature name is `'key'`. Override: `TFRecordRandomAccess("f.tfrecord", key_feature_name="id")`
-- Index cached to `<file>.index`; rebuilt automatically when file mtime changes.
+- Index cache name is auto-generated from the input (see "How it works" above); rebuilt automatically when the shard count changes.
 
 ## Reading Tar Archives (transitional use only)
 

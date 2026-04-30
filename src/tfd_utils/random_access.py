@@ -8,8 +8,10 @@ It builds an index on first access and caches it for subsequent lookups.
 import os
 import pickle
 import glob
+import re
+import threading
 import time
-from typing import Dict, Any, Optional, List, Union, BinaryIO
+from typing import Dict, Any, Optional, List, Tuple, Union, BinaryIO
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
@@ -17,6 +19,109 @@ from functools import partial
 from collections import OrderedDict
 
 from .pb2 import Example
+
+
+_SHARD_PATTERN = re.compile(r'^(\d+)_of_(\d+)\.')
+
+
+# ---------------------------------------------------------------------------
+# Lock-file helpers
+#
+# Lock token format:  "<owner>|<heartbeat_ns>"
+#   - owner        = "<pid>-<acquire_ns>" — uniquely identifies one acquisition.
+#   - heartbeat_ns = time.time_ns() of the most recent heartbeat write.
+#
+# The heartbeat timestamp lives in the *file content*, not the filesystem mtime,
+# so staleness detection works on filesystems where mtimes are unreliable
+# (HDFS, certain NFS configs).  The lock holder refreshes the heartbeat every
+# _HEARTBEAT_INTERVAL seconds; readers consider the lock stale when its
+# heartbeat hasn't been refreshed for _LOCK_STALE_AFTER seconds.
+# ---------------------------------------------------------------------------
+
+
+def _make_lock_token(owner: str) -> str:
+    """Build a fresh lock token for `owner` with the current timestamp."""
+    return f"{owner}|{time.time_ns()}"
+
+
+def _read_lock_token(lock_path: str) -> Optional[str]:
+    """Return the raw token text inside `lock_path`, or None if missing/unreadable."""
+    try:
+        with open(lock_path, 'rb') as f:
+            return f.read().decode('utf-8', errors='replace')
+    except (FileNotFoundError, OSError):
+        return None
+
+
+def _parse_lock(lock_path: str) -> Optional[Tuple[str, int]]:
+    """Parse the lock file content into `(owner, heartbeat_ns)`.
+
+    Returns None if the file is missing, unreadable, or doesn't match the
+    expected format (e.g. mid-write by another process).
+    """
+    text = _read_lock_token(lock_path)
+    if not text:
+        return None
+    try:
+        owner, hb = text.rsplit('|', 1)
+        return owner, int(hb)
+    except (ValueError, IndexError):
+        return None
+
+
+def _heartbeat_loop(
+    lock_path: str,
+    owner: str,
+    stop_event: threading.Event,
+    interval: float,
+) -> None:
+    """Refresh the heartbeat timestamp inside `lock_path` every `interval` seconds.
+
+    Stops when `stop_event` is set, when the lock file disappears, or when the
+    file's owner field no longer matches `owner` (someone else took over).
+    Writes go through `os.replace` from a sibling tmp file so each refresh is
+    atomic on POSIX/HDFS — no half-written content is observable.
+    """
+    tmp_path = lock_path + '.hb'
+    while not stop_event.wait(interval):
+        parsed = _parse_lock(lock_path)
+        if parsed is None or parsed[0] != owner:
+            return  # we no longer hold this lock
+        try:
+            with open(tmp_path, 'wb') as f:
+                f.write(_make_lock_token(owner).encode())
+            os.replace(tmp_path, lock_path)
+        except OSError:
+            return
+
+
+def _detect_complete_shard_set(file_paths: List[str]) -> Optional[int]:
+    """If `file_paths` form a complete `XXXXX_of_NNNNN.<ext>` shard set, return
+    the total count (NNNNN + 1).  Otherwise return None.
+
+    A set is "complete" iff every file matches the pattern with the same NNNNN
+    and the XXXXX values are exactly {0, 1, ..., NNNNN}.
+    """
+    last_idx_seen: Optional[int] = None
+    indices: set = set()
+    for path in file_paths:
+        m = _SHARD_PATTERN.match(os.path.basename(path))
+        if not m:
+            return None
+        idx = int(m.group(1))
+        last = int(m.group(2))
+        if last_idx_seen is None:
+            last_idx_seen = last
+        elif last != last_idx_seen:
+            return None
+        indices.add(idx)
+
+    if last_idx_seen is None:
+        return None
+    expected = last_idx_seen + 1
+    if indices != set(range(expected)):
+        return None
+    return expected
 
 
 class FileContextPool:
@@ -158,53 +263,43 @@ class TFRecordRandomAccess:
                 return sorted(glob.glob(path_str))
     
     def _get_index_file_path(self, index_file: Optional[Union[str, Path]]) -> str:
-        """Generate index file path if not provided."""
+        """Generate index file path if not provided.
+
+        Naming scheme (auto-generated):
+          - Single file:                 <file_stem>.index
+          - Complete shard set matching
+            XXXXX_of_NNNNN.<ext>:        <parent>/all<N>.index    (N = NNNNN + 1)
+          - Otherwise:                   <parent>/<first_stem>_unified_tot<N>.index
+
+        The file count is encoded in the auto-generated name, so existence at
+        this exact path implies validity — no mtime checks are needed.  If the
+        file set changes (count differs, or shards become incomplete), the
+        generated path differs and falls through to a rebuild.
+        """
         if index_file is not None:
             return str(index_file)
-        
-        # Generate based on first TFRecord file
+
         first_file = Path(self.tfrecord_files[0])
         if len(self.tfrecord_files) == 1:
-            # Single file: use same directory with .index extension
             return str(first_file.with_suffix('.index'))
-        else:
-            return str(first_file.parent / f"{first_file.stem}_unified.index")
-    
-    def _is_index_valid(self) -> bool:
-        """Check if the cached index is still valid."""
-        if not os.path.exists(self.index_file):
-            return False
-        
-        index_mtime = os.path.getmtime(self.index_file)
-        
-        # For performance optimization: if there are many files, only check the first 5
-        # and also check if the parent directory has been modified
-        if len(self.tfrecord_files) > 5:
-            # Check parent directory modification time
-            # Note: Allow small time difference to avoid conflicts when index file creation
-            # modifies the parent directory timestamp
-            parent_dir = os.path.dirname(self.tfrecord_files[0])
-            parent_mtime = os.path.getmtime(parent_dir)
-            
-            # If parent directory is significantly newer than index (more than 1 second),
-            # it suggests files may have been added/removed
-            if parent_mtime > index_mtime + 0.5:
-                return False
-            
-            # Check only the first 5 files
-            files_to_check = self.tfrecord_files[:5]
-        else:
-            # Check all files if there are 5 or fewer
-            files_to_check = self.tfrecord_files
-        
-        # Check if any TFRecord file is newer than the index
-        for tfrecord_file in files_to_check:
-            if not os.path.exists(tfrecord_file):
-                return False
-            if os.path.getmtime(tfrecord_file) > index_mtime:
-                return False
 
-        return True
+        parent = first_file.parent
+        total = _detect_complete_shard_set(self.tfrecord_files)
+        if total is not None:
+            return str(parent / f"all{total}.index")
+
+        n = len(self.tfrecord_files)
+        return str(parent / f"{first_file.stem}_unified_tot{n}.index")
+
+    def _is_index_valid(self) -> bool:
+        """Index is valid iff the cache file exists at the expected path.
+
+        For auto-generated names the file count is baked into the filename
+        (`all<N>.index` / `_unified_tot<N>.index`), so existence is sufficient
+        — a changed file count produces a different path and routes to a
+        rebuild via _get_index_file_path.  Mtime is intentionally not checked.
+        """
+        return os.path.exists(self.index_file)
     
     def _build_index(self) -> Dict[str, Dict[str, Any]]:
         """Build index for all TFRecord files."""
@@ -276,22 +371,30 @@ class TFRecordRandomAccess:
     def _load_index(self) -> Dict[str, Dict[str, Any]]:
         """Load index from cache file, or build it if missing/stale.
 
-        When multiple processes start simultaneously on a fresh dataset, only one
-        should build the index while the others wait.  We use atomic O_CREAT|O_EXCL
-        file creation as the locking primitive — this works on network filesystems
-        (NFS, CIFS, distributed storage) where fcntl.flock is not supported.
+        Concurrency model — when multiple processes start on a fresh dataset,
+        only one should build the index while the others wait.
 
-        1. Fast path  — index already valid → load and return immediately (no lock).
-        2. Slow path  — index missing or stale:
-           a. Try to create the .lock file exclusively (atomic on all POSIX fs).
-           b. If creation succeeds we hold the lock: double-check, build if needed,
-              save atomically, then remove the lock file.
-           c. If creation fails (FileExistsError) another process is building:
-              wait _POLL_INTERVAL seconds and retry.  If the lock file is older
-              than _LOCK_TIMEOUT seconds it is considered stale and removed.
+        1. Fast path  — index already valid → load and return.
+        2. Slow path  — try to create the `.lock` file with O_CREAT|O_EXCL and
+           write a unique token (`<owner>|<heartbeat_ns>`) into it.
+           - Stale check: parse the heartbeat_ns from the file *contents* and
+             treat the lock as dead if it hasn't been refreshed for
+             _LOCK_STALE_AFTER seconds.  Filesystem mtime is intentionally
+             not used — it's unreliable on HDFS / some NFS configs.
+           - Verify-after-write: some filesystems (HDFS, certain NFS configs)
+             do not provide truly atomic O_CREAT|O_EXCL semantics; two writers
+             can both "succeed" and one clobbers the other.  After acquiring
+             the lock we sleep _VERIFY_DELAY seconds, re-read the file, and
+             only proceed if the owner field is still ours.
+           - Heartbeat: while building, a daemon thread refreshes the
+             heartbeat_ns every _HEARTBEAT_INTERVAL seconds so other waiters
+             can tell we're alive.  If the build hangs, the heartbeat stops
+             and other processes will eventually steal the lock.
         """
-        _POLL_INTERVAL = 2.0   # seconds between polls while waiting
-        _LOCK_TIMEOUT  = 3600  # seconds before a lock is considered stale
+        _POLL_INTERVAL      = 2.0    # seconds between polls while waiting
+        _VERIFY_DELAY       = 1.0    # seconds to wait before verifying lock ownership
+        _HEARTBEAT_INTERVAL = 30.0   # heartbeat refresh period
+        _LOCK_STALE_AFTER   = 300.0  # treat as dead after 5 min without heartbeat
 
         # Fast path: no lock needed
         if self._is_index_valid():
@@ -302,21 +405,33 @@ class TFRecordRandomAccess:
         lock_path = self.index_file + '.lock'
 
         while True:
-            # Try to atomically create the lock file
+            my_owner = f"{os.getpid()}-{time.time_ns()}"
+            my_token = _make_lock_token(my_owner)
+
+            # Try to atomically create the lock file and write our token
             try:
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode())
-                os.close(fd)
-            except FileExistsError:
-                # Another process holds the lock — check for stale lock first
                 try:
-                    lock_age = time.time() - os.path.getmtime(lock_path)
-                    if lock_age > _LOCK_TIMEOUT:
-                        print(f"Removing stale lock (age {lock_age:.0f}s): {lock_path}")
-                        os.unlink(lock_path)
+                    os.write(fd, my_token.encode())
+                finally:
+                    os.close(fd)
+            except FileExistsError:
+                # Another process appears to hold the lock.  Check the
+                # content-stored heartbeat to decide if it's stale.
+                parsed = _parse_lock(lock_path)
+                if parsed is not None:
+                    _, hb_ns = parsed
+                    age = time.time() - hb_ns / 1e9
+                    if age > _LOCK_STALE_AFTER:
+                        print(
+                            f"Removing stale lock (no heartbeat for {age:.0f}s): "
+                            f"{lock_path}"
+                        )
+                        try:
+                            os.unlink(lock_path)
+                        except FileNotFoundError:
+                            pass
                         continue
-                except FileNotFoundError:
-                    continue  # Lock was released between our checks; retry immediately
 
                 # Index may have been built while we were waiting
                 if self._is_index_valid():
@@ -328,7 +443,27 @@ class TFRecordRandomAccess:
                 time.sleep(_POLL_INTERVAL)
                 continue
 
-            # We hold the lock — build the index, then release
+            # Lock created — but on non-atomic filesystems we may have raced
+            # with another writer.  Wait, then verify our owner survived.
+            time.sleep(_VERIFY_DELAY)
+            parsed = _parse_lock(lock_path)
+            if parsed is None or parsed[0] != my_owner:
+                print(
+                    f"Lock contention on {lock_path} "
+                    f"(owner mismatch: expected {my_owner!r}, got {parsed!r}); retrying"
+                )
+                # Don't unlink — the surviving lock belongs to the other writer.
+                time.sleep(_POLL_INTERVAL)
+                continue
+
+            # We hold the lock — start heartbeat, build the index, then release
+            stop_event = threading.Event()
+            hb_thread = threading.Thread(
+                target=_heartbeat_loop,
+                args=(lock_path, my_owner, stop_event, _HEARTBEAT_INTERVAL),
+                daemon=True,
+            )
+            hb_thread.start()
             try:
                 # Double-check: another process may have finished just before us
                 if self._is_index_valid():
@@ -338,9 +473,15 @@ class TFRecordRandomAccess:
                 print("Index cache is invalid or missing, rebuilding...")
                 return self._build_index()
             finally:
+                stop_event.set()
+                hb_thread.join(timeout=5.0)
+                # Only remove if the lock still holds our owner — never delete
+                # another writer's lock on a non-atomic filesystem.
                 try:
-                    os.unlink(lock_path)
-                except FileNotFoundError:
+                    parsed = _parse_lock(lock_path)
+                    if parsed and parsed[0] == my_owner:
+                        os.unlink(lock_path)
+                except (FileNotFoundError, OSError):
                     pass
     
     @property
